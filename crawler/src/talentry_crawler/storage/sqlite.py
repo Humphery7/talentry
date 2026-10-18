@@ -1,0 +1,273 @@
+"""Save companies and jobs in a local SQLite file (output/jobs.db).
+
+Two tables:
+  companies  one row per employer       (from data/companies.csv)
+  jobs       one row per job posting    (found by the crawl)
+
+A job is never deleted. When it disappears from its career page it is marked
+status='closed', and if it comes back it is marked 'open' again.
+
+The same two tables map 1:1 to Postgres later; only this file changes.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
+from talentry_crawler.config.paths import OUTPUT_DIR
+from talentry_crawler.models import Board, Company, Job
+
+DEFAULT_DB = OUTPUT_DIR / "jobs.db"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS companies (
+    slug TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    website TEXT,
+    logo_url TEXT,
+    icon_url TEXT,
+    industry TEXT,
+    employee_count_range TEXT,
+    founded_year INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    url TEXT PRIMARY KEY,
+    company_slug TEXT NOT NULL,
+    board_slug TEXT NOT NULL,
+    monitor_type TEXT NOT NULL,
+    title TEXT,
+    description TEXT,
+    locations_json TEXT,
+    employment_type TEXT,
+    workplace_type TEXT,
+    date_posted TEXT,
+    salary_json TEXT,
+    metadata_json TEXT,
+    seniority TEXT,
+    occupation TEXT,
+    technologies_json TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    closed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_slug);
+CREATE INDEX IF NOT EXISTS idx_jobs_board ON jobs(board_slug);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+"""
+
+# Insert a job, or refresh it if we already have it (same url).
+# first_seen_at is deliberately not in the UPDATE list: it keeps the original date.
+SAVE_JOB = """
+INSERT INTO jobs (
+    url, company_slug, board_slug, monitor_type,
+    title, description, locations_json, employment_type, workplace_type,
+    date_posted, salary_json, metadata_json,
+    seniority, occupation, technologies_json,
+    status, first_seen_at, last_seen_at
+) VALUES (
+    :url, :company_slug, :board_slug, :monitor_type,
+    :title, :description, :locations_json, :employment_type, :workplace_type,
+    :date_posted, :salary_json, :metadata_json,
+    :seniority, :occupation, :technologies_json,
+    'open', :now, :now
+)
+ON CONFLICT(url) DO UPDATE SET
+    company_slug = excluded.company_slug,
+    board_slug = excluded.board_slug,
+    monitor_type = excluded.monitor_type,
+    title = excluded.title,
+    description = excluded.description,
+    locations_json = excluded.locations_json,
+    employment_type = excluded.employment_type,
+    workplace_type = excluded.workplace_type,
+    date_posted = excluded.date_posted,
+    salary_json = excluded.salary_json,
+    metadata_json = excluded.metadata_json,
+    seniority = excluded.seniority,
+    occupation = excluded.occupation,
+    technologies_json = excluded.technologies_json,
+    status = 'open',
+    closed_at = NULL,
+    last_seen_at = excluded.last_seen_at
+"""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _json_or_none(value) -> str | None:
+    return json.dumps(value) if value else None
+
+
+def _companies_fingerprint(companies: list[Company]) -> str:
+    """Stable hash of the company list. Changes iff any field changes."""
+    hasher = hashlib.sha256()
+    for c in sorted(companies, key=lambda c: c.slug):
+        hasher.update(
+            json.dumps(
+                [
+                    c.slug,
+                    c.name,
+                    c.website,
+                    c.logo_url,
+                    c.icon_url,
+                    c.industry,
+                    c.employee_count_range,
+                    c.founded_year,
+                ],
+                sort_keys=True,
+            ).encode("utf-8")
+        )
+    return hasher.hexdigest()
+
+
+class JobStore:
+    def __init__(self, path: Path | str | None = None) -> None:
+        self.path = Path(path) if path else DEFAULT_DB
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(self.path)
+        self._conn.row_factory = sqlite3.Row
+        self._refuse_old_database()
+        self._conn.executescript(SCHEMA)
+
+    def _refuse_old_database(self) -> None:
+        """An older version of the crawler made a jobs table without 'status'."""
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(jobs)")}
+        if columns and "status" not in columns:
+            raise RuntimeError(
+                f"{self.path} was created by an older version of the crawler. "
+                "Delete that file and run again (it only holds crawled jobs, which are quick to re-fetch)."
+            )
+
+    # ---- writing -------------------------------------------------------------
+
+    def save_companies(self, companies: list[Company]) -> bool:
+        """Upsert companies, but skip the write if nothing changed.
+
+        companies.csv is static until manually edited, so we hash the list
+        and store it in `meta`. Same hash as last time -> no SQL writes.
+        Returns True if rows were written, False if skipped.
+        """
+        fingerprint = _companies_fingerprint(companies)
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = 'companies_hash'"
+        ).fetchone()
+        if row is not None and row["value"] == fingerprint:
+            return False
+
+        rows = [
+            (
+                c.slug, c.name, c.website, c.logo_url, c.icon_url,
+                c.industry, c.employee_count_range, c.founded_year,
+            )
+            for c in companies
+        ]
+        with self._conn:
+            self._conn.executemany("INSERT OR REPLACE INTO companies VALUES (?,?,?,?,?,?,?,?)", rows)
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('companies_hash', ?)",
+                (fingerprint,),
+            )
+        return True
+
+    def save_board_jobs(self, board: Board, jobs: list[Job]) -> tuple[int, int, int]:
+        """Save everything one board returned. Returns (inserted, updated, closed).
+
+        Call this only after a SUCCESSFUL fetch: any job of this board that is not
+        in `jobs` is treated as gone and marked closed.
+        """
+        now = _now()
+        urls = {job.url for job in jobs}
+        known = {
+            row["url"]
+            for row in self._conn.execute(
+                "SELECT url FROM jobs WHERE board_slug = ?", (board.board_slug,)
+            )
+        }
+        rows = [
+            {
+                "url": job.url,
+                "company_slug": board.company_slug,
+                "board_slug": board.board_slug,
+                "monitor_type": board.monitor_type,
+                "title": job.title,
+                "description": job.description,
+                "locations_json": _json_or_none(job.locations),
+                "employment_type": job.employment_type,
+                "workplace_type": job.workplace_type,
+                "date_posted": job.date_posted,
+                "salary_json": _json_or_none(job.salary),
+                "metadata_json": _json_or_none(job.metadata),
+                "seniority": job.seniority,
+                "occupation": job.occupation,
+                "technologies_json": _json_or_none(job.technologies),
+                "now": now,
+            }
+            for job in jobs
+        ]
+
+        with self._conn:  # one transaction: all of it is saved, or none of it
+            self._conn.executemany(SAVE_JOB, rows)
+            # Everything we just saw has last_seen_at == now. Anything older was not on the page.
+            closed = self._conn.execute(
+                """
+                UPDATE jobs SET status = 'closed', closed_at = ?
+                WHERE board_slug = ? AND status = 'open' AND last_seen_at < ?
+                """,
+                (now, board.board_slug, now),
+            ).rowcount
+
+        return len(urls - known), len(urls & known), closed
+
+    # ---- reading (used by the CLI) -------------------------------------------
+
+    def stats(self) -> dict[str, int | str]:
+        row = self._conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(status = 'open'), 0)   AS open_jobs,
+                COALESCE(SUM(status = 'closed'), 0) AS closed_jobs,
+                COUNT(DISTINCT company_slug)        AS companies_with_jobs,
+                COUNT(DISTINCT board_slug)          AS boards
+            FROM jobs
+            """
+        ).fetchone()
+        companies = self._conn.execute("SELECT COUNT(*) FROM companies").fetchone()[0]
+        return {
+            "db": str(self.path),
+            "open_jobs": int(row["open_jobs"]),
+            "closed_jobs": int(row["closed_jobs"]),
+            "companies_with_jobs": int(row["companies_with_jobs"]),
+            "boards": int(row["boards"]),
+            "companies_loaded": int(companies),
+        }
+
+    def sample(self, n: int = 5) -> list[dict]:
+        rows = self._conn.execute(
+            """
+            SELECT c.name AS company, j.title, j.seniority, j.occupation,
+                   j.technologies_json, j.locations_json, j.url
+            FROM jobs j LEFT JOIN companies c ON c.slug = j.company_slug
+            WHERE j.status = 'open'
+            ORDER BY j.last_seen_at DESC
+            LIMIT ?
+            """,
+            (n,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def close(self) -> None:
+        self._conn.close()

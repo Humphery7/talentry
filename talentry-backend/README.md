@@ -1,0 +1,87 @@
+# Talentry backend (Express API)
+
+REST API over the same Neon Postgres database the crawler writes.
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `POST /auth/signup`, `POST /auth/login` | – | Create account / log in, returns `{ user, accessToken }` |
+| `GET /auth/profile` | JWT | Current user |
+| `GET /jobs`, `GET /jobs/:id` | – | Search (filters + paging) / one job |
+| `GET /companies`, `GET /companies/:slug` | – | List / one company with its open jobs |
+| `POST /applications`, `GET /applications` | JWT | Apply to a job / list my applications |
+
+## Run
+
+```bash
+npm install
+cp .env.example .env     # then fill in DATABASE_URL and JWT_SECRET
+npm run start:dev        # http://localhost:3001, restarts on file changes
+```
+
+| Command | What it does |
+| --- | --- |
+| `npm start` | Run once (no file watching) |
+| `npm run start:dev` | Run and restart on changes |
+| `npm run build` then `npm run start:prod` | Compile to `dist/` and run the compiled JavaScript |
+| `npm test` | Unit tests (no database needed) |
+| `TEST_DATABASE_URL="postgresql://..." npm run test:e2e` | End-to-end tests against a real Postgres (see warning below) |
+| `npm run typecheck` / `npm run lint` / `npm run format` | Type-check, lint, auto-format |
+
+> **e2e warning:** these tests create and delete a throwaway user, so they only run when
+> you pass `TEST_DATABASE_URL` explicitly. They never use the `DATABASE_URL` from `.env`.
+> The database must already contain the crawler's `companies` and `jobs` tables.
+
+## Environment (`.env`, gitignored)
+
+```bash
+DATABASE_URL="postgresql://USER:PASSWORD@HOST/neondb?sslmode=require"
+JWT_SECRET="<long random string>"   # signs login tokens; changing it logs everyone out
+PORT=3001
+```
+
+On startup the server creates `users` and `applications` if missing and adds a numeric
+`jobs.id` column if missing. This is additive only, so the crawler is unaffected.
+
+## Folder structure
+
+```
+src/
+  server.ts          Entry point: run migrations, start listening, shut down cleanly
+  app.ts             Builds the Express app: middleware + routes + error handling
+  config/env.ts      Reads .env (DATABASE_URL, JWT_SECRET, PORT)
+  db/
+    pool.ts          The shared Postgres connection pool
+    migrate.ts       Startup table/column creation
+  routes/            URL + middleware + handler. One file per feature
+  services/          Business logic and SQL. Know nothing about req/res
+  validators/        Check request input; throw a 400 listing every problem
+  middleware/
+    auth.ts          requireAuth: verifies the Bearer JWT, sets req.user
+    not-found.ts     404 for unknown URLs
+    error-handler.ts Turns every thrown error into { message, error, statusCode }
+  utils/http-error.ts  `throw new HttpError(404, 'Job not found.')`
+test/
+  unit/              Fast tests, no database
+  e2e/               Full-stack tests against a real database
+```
+
+### How a request flows
+
+`POST /applications` with `{ "jobId": 3 }`:
+
+1. `routes/applications.routes.ts` matches it and runs `requireAuth`.
+2. `middleware/auth.ts` verifies the token and sets `req.user`.
+3. The route handler calls `parseApply(req.body)` to validate input.
+4. `services/applications.service.ts` runs the SQL and returns the result.
+5. The handler sends it with `res.status(201).json(...)`.
+
+If anything throws (bad input, missing job, database down), Express skips straight to
+`middleware/error-handler.ts`, which sends the error response. Express 5 forwards errors
+from `async` functions automatically, so handlers need no try/catch.
+
+### Adding an endpoint
+
+1. Add the SQL/logic as a function in the feature's `services/*.service.ts`.
+2. Add a validator in `validators/` if it takes input.
+3. Add a route in `routes/*.routes.ts` whose handler calls the validator, then the service
+   (add `requireAuth` to the route's middleware chain to protect it).
