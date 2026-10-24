@@ -5,9 +5,12 @@ REST API over the same Neon Postgres database the crawler writes.
 | Endpoint | Auth | Purpose |
 | --- | --- | --- |
 | `POST /auth/signup`, `POST /auth/login` | – | Create account / log in, returns `{ user, accessToken }` |
+| `GET /auth/google/login`, `GET /auth/google/callback` | – | Sign in with Google (OpenID Connect) |
 | `GET /auth/profile` | JWT | Current user |
 | `GET /jobs`, `GET /jobs/:id` | – | Search (filters + paging) / one job |
 | `GET /companies`, `GET /companies/:slug` | – | List / one company with its open jobs |
+| `GET /candidate-profile`, `PUT /candidate-profile` | JWT | Read / save your optional career details |
+| `PUT /candidate-profile/cv`, `GET /candidate-profile/cv` | JWT | Upload a PDF CV / download its extracted text |
 | `POST /applications`, `GET /applications` | JWT | Apply to a job / list my applications |
 
 ## Run
@@ -24,6 +27,7 @@ npm run start:dev        # http://localhost:3001, restarts on file changes
 | `npm run start:dev` | Run and restart on changes |
 | `npm run build` then `npm run start:prod` | Compile to `dist/` and run the compiled JavaScript |
 | `npm test` | Unit tests (no database needed) |
+| `npm run embed:jobs` | Embed new/changed jobs for semantic matching (run after a crawl) |
 | `TEST_DATABASE_URL="postgresql://..." npm run test:e2e` | End-to-end tests against a real Postgres (see warning below) |
 | `npm run typecheck` / `npm run lint` / `npm run format` | Type-check, lint, auto-format |
 
@@ -37,10 +41,30 @@ npm run start:dev        # http://localhost:3001, restarts on file changes
 DATABASE_URL="postgresql://USER:PASSWORD@HOST/neondb?sslmode=require"
 JWT_SECRET="<long random string>"   # signs login tokens; changing it logs everyone out
 PORT=3001
+CAREER_API_URL="http://localhost:8000"  # internal Python service for interview prep
 ```
 
-On startup the server creates `users` and `applications` if missing and adds a numeric
-`jobs.id` column if missing. This is additive only, so the crawler is unaffected.
+Interview prep calls `talentry-career` server-side; the browser never talks to it directly.
+Run that service separately and point `CAREER_API_URL` at it.
+
+Google sign-in is optional. Fill these in to enable it (otherwise leave blank and the
+endpoint just returns an error):
+
+```bash
+GOOGLE_CLIENT_ID="<from Google Cloud console>"
+GOOGLE_CLIENT_SECRET="<from Google Cloud console>"
+OIDC_ISSUER="https://accounts.google.com"
+REDIRECT_URL="http://localhost:3001/auth/google/callback"  # must match the console exactly
+FRONTEND_URL="http://localhost:3000"                       # where users land after login
+SESSION_SECRET="<long random string>"                      # signs the short-lived OAuth session
+```
+
+On startup the server creates the tables and adds missing columns, including the
+`vector` extension and the profile/job embedding columns. This is additive only, so the
+crawler is unaffected. Saving a profile or uploading a CV rebuilds the profile vector.
+`npm run embed:jobs` fills job vectors; a trigger clears a job's vector when the crawler
+changes its text, so rerun the command after a crawl. Vectors use
+`Xenova/all-MiniLM-L6-v2` (384 dimensions).
 
 ## Folder structure
 

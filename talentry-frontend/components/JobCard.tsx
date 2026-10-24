@@ -14,7 +14,7 @@ export default memo(function JobCard({ job, i }: { job: Job; i: number }) {
       <h3>{job.title}</h3>
       <div className="tags">{job.tags.map(t => <span key={t}>{t}</span>)}</div>
       <div className="sal2">{job.min || job.max ? `$${job.min}K - $${job.max}K` : 'Salary not listed'}</div>
-      <div className="foot"><span><Icon n="user" />{job.app}</span><span><Icon n="chk" />{job.int}</span><Link className="det" href={`/jobs/${job.id}`}>Details</Link></div>
+      <div className="foot"><span>{job.loc}</span><Link className="det" href={`/jobs/${job.id}`}>Details</Link></div>
     </article>
   )
 })

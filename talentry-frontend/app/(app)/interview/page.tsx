@@ -1,4 +1,11 @@
 import type { Metadata } from 'next'
-import { Interview } from '@/components/Practice'
-export const metadata: Metadata = { title: 'Mock Interview' }
-export default function Page() { return <Interview /> }
+import { Suspense } from 'react'
+import InterviewPrep from '@/components/InterviewPrep'
+export const metadata: Metadata = { title: 'Interview prep' }
+export default function Page() {
+  return (
+    <Suspense fallback={<div className="panel">Loading interview prep…</div>}>
+      <InterviewPrep />
+    </Suspense>
+  )
+}

@@ -70,9 +70,18 @@ describe('protected routes', () => {
     ['GET', '/auth/profile'],
     ['GET', '/applications'],
     ['POST', '/applications'],
+    ['GET', '/interview/attempts'],
+    ['POST', '/interview/attempts'],
+    ['GET', '/interview/attempts/123e4567-e89b-42d3-a456-426614174000'],
+    ['GET', '/interview/attempts/123e4567-e89b-42d3-a456-426614174000/feedback'],
+    [
+      'PUT',
+      '/interview/attempts/123e4567-e89b-42d3-a456-426614174000/responses/i1',
+    ],
   ] as const)('%s %s requires a token', async (method, path) => {
-    const res =
-      await request(app)[method.toLowerCase() as 'get' | 'post'](path);
+    const res = await request(app)[
+      method.toLowerCase() as 'get' | 'post' | 'put'
+    ](path);
     expect(res.status).toBe(401);
     expect(res.body).toEqual({
       message: 'Missing bearer token.',
@@ -119,6 +128,26 @@ describe('protected routes', () => {
       .send({ jobId: 'nope' });
     expect(res.status).toBe(400);
     expect(res.body.message).toEqual(['jobId must be an integer number']);
+  });
+
+  it('validates interview requests before touching the database', async () => {
+    const start = await request(app)
+      .post('/interview/attempts')
+      .set(bearer)
+      .send({});
+    expect(start.status).toBe(400);
+    expect(start.body.message).toEqual(['jobId must be an integer number']);
+
+    const answer = await request(app)
+      .put(
+        '/interview/attempts/123e4567-e89b-42d3-a456-426614174000/responses/i1',
+      )
+      .set(bearer)
+      .send({});
+    expect(answer.status).toBe(400);
+    expect(answer.body.message).toEqual([
+      'Provide selectedOptionId, text or completed.',
+    ]);
   });
 });
 

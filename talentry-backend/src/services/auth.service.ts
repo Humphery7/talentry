@@ -40,11 +40,51 @@ export async function login(email: string, password: string) {
     'SELECT id, name, email, password_hash FROM users WHERE email = $1',
     [normalized],
   );
-  const row = rows[0] as (PublicUser & { password_hash: string }) | undefined;
-  if (!row || !(await bcrypt.compare(password, row.password_hash))) {
+  const row = rows[0] as
+    (PublicUser & { password_hash: string | null }) | undefined;
+  // password_hash is null for accounts created with Google, which have no password.
+  if (
+    !row?.password_hash ||
+    !(await bcrypt.compare(password, row.password_hash))
+  ) {
     throw new HttpError(401, 'Invalid email or password.');
   }
   const user: PublicUser = { id: row.id, name: row.name, email: row.email };
+  return { user, accessToken: signToken(user) };
+}
+
+export interface GoogleProfile {
+  name?: string;
+  email?: string;
+}
+
+/**
+ * Logs in a Google user, creating the account on first sight. Google has
+ * already verified the email, so we match accounts on it. Returns the same
+ * `{ user, accessToken }` shape as signup/login, so the frontend stores one
+ * kind of session regardless of how someone signed in.
+ */
+export async function loginWithGoogle(profile: GoogleProfile) {
+  const email = profile.email?.trim().toLowerCase();
+  if (!email)
+    throw new HttpError(400, 'Your Google account has no email address.');
+
+  const existing = await pool.query(
+    'SELECT id, name, email FROM users WHERE email = $1',
+    [email],
+  );
+  if (existing.rowCount) {
+    const user = existing.rows[0] as PublicUser;
+    return { user, accessToken: signToken(user) };
+  }
+
+
+  const name = profile.name?.trim() || email.split('@')[0];
+  const { rows } = await pool.query(
+    'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, NULL) RETURNING id, name, email',
+    [name, email],
+  );
+  const user = rows[0] as PublicUser;
   return { user, accessToken: signToken(user) };
 }
 

@@ -7,15 +7,18 @@ import {
   type Input,
 } from './rules.js';
 
-/** Mirrors the frontend URL params (q, loc, lvl, typ, ind, sch, co, lo, hi, types, sort, ids) + paging. */
+/** Mirrors the frontend URL params (q, loc, lvl, typ, ind, sch, co, lo, hi, types, roles, sort, ids) + paging. */
 export interface JobsQuery {
   q?: string;
   loc?: string;
   lvl?: string;
   typ?: string;
+  /** Comma-separated occupation slugs, e.g. `roles=frontend-developer,backend-developer`. */
+  roles?: string;
   ind?: string;
   sch?: string;
   co?: string;
+  /** Salary floor/ceiling in thousands, e.g. 35 means $35K. */
   lo?: number;
   hi?: number;
   /** Comma-separated job types, e.g. `types=Full time,Contract`. */
@@ -35,6 +38,7 @@ export function parseJobsQuery(query: Input): JobsQuery {
     loc: optionalString(query, 'loc', errors),
     lvl: optionalString(query, 'lvl', errors),
     typ: optionalString(query, 'typ', errors),
+    roles: optionalString(query, 'roles', errors),
     ind: optionalString(query, 'ind', errors),
     sch: optionalString(query, 'sch', errors),
     co: optionalString(query, 'co', errors),

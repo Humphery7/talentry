@@ -1,6 +1,7 @@
 import { pool } from '../db/pool.js';
 import { HttpError } from '../utils/http-error.js';
 import type { JobsQuery } from '../validators/jobs.validator.js';
+import { createEmbedding } from './embedding.service.js';
 
 const SELECT = `
   SELECT j.id, j.url, j.company_slug AS "companySlug", j.board_slug AS "boardSlug",
@@ -67,6 +68,63 @@ function parseJson(raw: unknown): unknown {
   }
 }
 
+interface JobTextSource {
+  title: string | null;
+  description: string | null;
+  companyName?: string | null;
+  locations?: string[];
+  employmentType?: string | null;
+  workplaceType?: string | null;
+  seniority?: string | null;
+  occupation?: string | null;
+  technologies?: string[];
+}
+
+// The embedding model only reads the first part of a long description anyway.
+const MAX_DESCRIPTION = 4_000;
+
+/** Removes the HTML the crawler receives from job boards. */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Builds the text that represents a job. Null fields are left out. */
+export function buildJobText(job: JobTextSource): string {
+  const parts: string[] = [];
+
+  function add(label: string, value: string | null | undefined) {
+    const text = value?.trim();
+    if (text) parts.push(`${label}: ${text}`);
+  }
+
+  add('Job title', job.title);
+  add('Company', job.companyName);
+  add('Location', job.locations?.join(', '));
+  add('Workplace', job.workplaceType);
+  add('Employment type', job.employmentType);
+  add('Seniority', job.seniority);
+  add('Occupation', job.occupation?.replace(/-/g, ' '));
+  add('Technologies', job.technologies?.join(', '));
+
+  if (job.description) {
+    const description = stripHtml(job.description).slice(0, MAX_DESCRIPTION);
+    if (description) parts.push(`Description:\n${description}`);
+  }
+
+  return parts.join('\n\n');
+}
+
 /** Builds WHERE + params. Shared by the page query and the count query. */
 function buildWhere(q: JobsQuery): { sql: string; params: unknown[] } {
   const conds: string[] = [];
@@ -101,6 +159,13 @@ function buildWhere(q: JobsQuery): { sql: string; params: unknown[] } {
     ];
     conds.push(`lower(j.seniority) = ANY(${p(levels)})`);
   }
+  if (q.roles?.trim()) {
+    const roles = q.roles
+      .split(',')
+      .map((r) => r.trim().toLowerCase())
+      .filter(Boolean);
+    if (roles.length) conds.push(`lower(j.occupation) = ANY(${p(roles)})`);
+  }
   const typeList = [
     ...(q.typ?.trim() ? [q.typ.trim()] : []),
     ...(q.types
@@ -123,12 +188,15 @@ function buildWhere(q: JobsQuery): { sql: string; params: unknown[] } {
   }
   // Salary data is sparse (all NULL in the current crawl): NULL salaries pass
   // the range instead of vanishing. Extracts {min,max}-style JSON when present.
+  // The UI sends thousands ($35K), while the crawler stores yearly dollars.
   if (q.lo !== undefined || q.hi !== undefined) {
+    const min = (q.lo ?? 0) * 1000;
+    const max = (q.hi ?? 999_999) * 1000;
     conds.push(
-      `(j.salary_json IS NULL OR ${SAL_MIN} IS NULL OR ${SAL_MIN} <= ${p(q.hi ?? 999999999)})`,
+      `(j.salary_json IS NULL OR ${SAL_MIN} IS NULL OR ${SAL_MIN} <= ${p(max)})`,
     );
     conds.push(
-      `(j.salary_json IS NULL OR ${SAL_MAX} IS NULL OR ${SAL_MAX} >= ${p(q.lo ?? 0)})`,
+      `(j.salary_json IS NULL OR ${SAL_MAX} IS NULL OR ${SAL_MAX} >= ${p(min)})`,
     );
   }
   if (q.ids?.trim()) {
@@ -200,8 +268,94 @@ export async function list(q: JobsQuery) {
   };
 }
 
+/** Open-job counts per occupation, for the role picker. */
+export async function facets() {
+  const { rows } = await pool.query(
+    `SELECT j.occupation AS slug, COUNT(*)::int AS count
+     FROM jobs j
+     WHERE j.status = 'open'
+       AND j.occupation IS NOT NULL
+       AND j.occupation <> ''
+     GROUP BY j.occupation
+     ORDER BY COUNT(*) DESC, j.occupation ASC`,
+  );
+  return { roles: rows as Array<{ slug: string; count: number }> };
+}
+
 export async function getOne(id: number) {
   const { rows } = await pool.query(`${SELECT} WHERE j.id = $1`, [id]);
   if (!rows.length) throw new HttpError(404, 'Job not found.');
   return mapRow(rows[0]);
+}
+
+interface JobEmbeddingRow {
+  id: string;
+  title: string | null;
+  description: string | null;
+  companyName: string | null;
+  locationsJson: unknown;
+  employmentType: string | null;
+  workplaceType: string | null;
+  seniority: string | null;
+  occupation: string | null;
+  technologiesJson: unknown;
+}
+
+/** Rebuilds one job's vector from its current text. */
+export async function refreshJobEmbedding(id: string) {
+  const { rows } = await pool.query(`${SELECT} WHERE j.id = $1`, [id]);
+  const job = rows[0] as JobEmbeddingRow | undefined;
+  if (!job) return;
+
+  const text = buildJobText({
+    title: job.title,
+    description: job.description,
+    companyName: job.companyName,
+    locations: parseJsonArray(job.locationsJson),
+    employmentType: job.employmentType,
+    workplaceType: job.workplaceType,
+    seniority: job.seniority,
+    occupation: job.occupation,
+    technologies: parseJsonArray(job.technologiesJson),
+  });
+
+  if (!text) {
+    // Mark it processed so the backfill does not retry an empty job forever.
+    await pool.query(
+      `UPDATE jobs SET embedding = NULL, embedding_updated_at = now()
+       WHERE id = $1`,
+      [id],
+    );
+    return;
+  }
+
+  const embedding = await createEmbedding(text);
+  await pool.query(
+    `UPDATE jobs SET embedding = $2::vector, embedding_updated_at = now()
+     WHERE id = $1`,
+    [id, JSON.stringify(embedding)],
+  );
+}
+
+/** Embeds every job that has never been embedded, or whose text changed. */
+export async function backfillJobEmbeddings() {
+  const { rows } = await pool.query(
+    `SELECT id FROM jobs
+     WHERE embedding IS NULL AND embedding_updated_at IS NULL
+     ORDER BY id`,
+  );
+
+  let processed = 0;
+  let failed = 0;
+  for (const row of rows) {
+    try {
+      await refreshJobEmbedding(row.id as string);
+      processed++;
+    } catch (err) {
+      failed++;
+      console.error(`Could not embed job ${row.id}:`, err);
+    }
+  }
+
+  return { found: rows.length, processed, failed };
 }

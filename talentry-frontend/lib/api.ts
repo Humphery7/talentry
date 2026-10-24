@@ -1,6 +1,6 @@
 // The single seam between UI and backend. Server pages call these;
 // they fetch the NestJS API (API_URL server-side, default localhost:3001).
-import type { Job, JobQuery } from './data'
+import { roleLabel, type Job, type JobQuery, type RoleFacet } from './data'
 
 const API_BASE = process.env.API_URL ?? 'http://localhost:3001'
 
@@ -60,7 +60,7 @@ export function mapJob(b: BackendJob): Job {
     id: b.id, co, bg: bgFor(co), ch: initials(co),
     date: fmtDate(b.datePosted ?? b.lastSeenAt), title: b.title ?? '(untitled)',
     tags: [prettyType(b.employmentType), b.workplaceType, lvl, b.occupation].filter(Boolean) as string[],
-    min, max, app: 0, int: 0,
+    min, max,
     loc: b.locations[0] ?? 'Unspecified', ind: b.company.industry ?? '',
   }
 }
@@ -72,12 +72,15 @@ function params(q: JobQuery): string {
     p.set(k, Array.isArray(v) ? v.join(',') : String(v))
   }
   put('q', q.q); put('loc', q.loc); put('lvl', q.lvl); put('typ', q.typ); put('ind', q.ind)
-  put('sch', q.sch); put('co', q.co); put('sort', q.sort); put('ids', q.ids)
+  put('sch', q.sch); put('co', q.co); put('sort', q.sort); put('ids', q.ids); put('roles', q.roles)
   if (q.lo !== undefined) p.set('lo', String(q.lo))
   if (q.hi !== undefined) p.set('hi', String(q.hi))
   if (q.types?.length) p.set('types', q.types.join(','))
   if (q.page && q.page > 1) p.set('page', String(q.page))
-  p.set('limit', '20')
+  // The jobs page groups results by company after fetching. A small page size
+  // lets one company with many roles fill the whole page, so ask for the API
+  // maximum and let each company card scroll internally.
+  p.set('limit', '100')
   return p.toString()
 }
 
@@ -86,6 +89,19 @@ export async function getJobs(q: JobQuery): Promise<{ jobs: Job[]; total: number
   if (!r.ok) throw new Error(`Backend ${r.status}`)
   const d = await r.json()
   return { jobs: (d.data as BackendJob[]).map(mapJob), total: d.meta.total, pages: d.meta.pages }
+}
+
+/** Open-job counts per occupation, straight from the crawler's labels. */
+export async function getRoleFacets(): Promise<RoleFacet[]> {
+  try {
+    // Counts change slowly; avoid re-running the GROUP BY on every page view.
+    const r = await fetch(`${API_BASE}/jobs/facets`, { next: { revalidate: 60 } })
+    if (!r.ok) return []
+    const d = (await r.json()) as { roles?: Array<{ slug: string; count: number }> }
+    return (d.roles ?? []).map(role => ({ ...role, label: roleLabel(role.slug) }))
+  } catch {
+    return []
+  }
 }
 
 export async function getJob(id: number): Promise<Job | undefined> {
@@ -99,4 +115,28 @@ export async function getCompanies(): Promise<BackendCompany[]> {
   const r = await fetch(`${API_BASE}/companies?limit=100`, { cache: 'no-store' })
   if (!r.ok) throw new Error(`Backend ${r.status}`)
   return (await r.json()).data as BackendCompany[]
+}
+
+export interface LiveCounts {
+  openJobs: number
+  companies: number
+}
+
+/** Real totals for the About page. Returns null when the API is unreachable. */
+export async function getLiveCounts(): Promise<LiveCounts | null> {
+  try {
+    const [jobs, companies] = await Promise.all([
+      fetch(`${API_BASE}/jobs?status=open&limit=1`, { cache: 'no-store' }),
+      fetch(`${API_BASE}/companies?limit=1`, { cache: 'no-store' }),
+    ])
+    if (!jobs.ok || !companies.ok) return null
+    const j = (await jobs.json()) as { meta?: { total?: number } }
+    const c = (await companies.json()) as { meta?: { total?: number } }
+    return {
+      openJobs: Number(j.meta?.total ?? 0),
+      companies: Number(c.meta?.total ?? 0),
+    }
+  } catch {
+    return null
+  }
 }

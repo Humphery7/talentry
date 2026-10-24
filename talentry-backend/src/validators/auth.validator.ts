@@ -17,7 +17,7 @@ export interface LoginInput {
 }
 
 export function parseSignup(body: Input = {}): SignupInput {
-  const errors: string[] = [];
+  const errors: Array<string> = [];
   const input = {
     name: requiredString(body, 'name', errors, { notEmpty: true, max: 120 }),
     email: requiredEmail(body, 'email', errors),

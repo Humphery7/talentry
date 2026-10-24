@@ -2,6 +2,8 @@
 // easy to test: `createApp()` can be handed straight to supertest.
 import cors from 'cors';
 import express from 'express';
+import session from 'express-session';
+import { env } from './config/env.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { notFound } from './middleware/not-found.js';
 import { routes } from './routes/index.js';
@@ -12,6 +14,19 @@ export function createApp() {
   app.use(cors()); // allow any origin, same as before
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+  app.use(
+    session({
+      secret: env.sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax', // must be lax, not strict, or the redirect back from the provider drops the cookie
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      },
+    }),
+  );
 
   app.use(routes);
 

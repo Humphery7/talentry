@@ -92,4 +92,5 @@ A few things you'll notice reading through it:
   types (Workday, RSS, sitemaps…). Those rows are just skipped.
 - The CV analyzer, career coach, and interview practice screens are UI-only.
 - Saved jobs live in localStorage; there's no server-side saved-jobs endpoint.
-- No sign in with Google yet, even though the config for it is sitting there.
+- Sign in with Google is wired up (OpenID Connect) but needs the `GOOGLE_CLIENT_ID` /
+  `GOOGLE_CLIENT_SECRET` / `REDIRECT_URL` values in `talentry-backend/.env`.

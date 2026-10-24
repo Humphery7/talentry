@@ -42,7 +42,7 @@ function Form({ mode, onClose }: { mode: 'login' | 'signup'; onClose: () => void
         <button className="go" disabled={busy}>{busy ? 'Please wait…' : login ? 'Log in' : 'Create account'}</button>
         <div className="or">or continue with</div>
         <div className="sso">
-          <button type="button" onClick={() => setErr('Google sign-in is not connected yet.')}><span className="g">G</span>Google</button>
+          <button type="button" onClick={() => { window.location.href = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/api/auth/google` }}><span className="g">G</span>Google</button>
           <button type="button" onClick={() => setErr('Apple sign-in is not connected yet.')}><Apple />Apple</button>
         </div>
         <p className="sw">{login ? "Don't have an account?" : 'Already have an account?'}

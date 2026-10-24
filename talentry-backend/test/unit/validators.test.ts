@@ -5,6 +5,7 @@ import {
   parseLogin,
   parseSignup,
 } from '../../src/validators/auth.validator.js';
+import { parseCandidateProfile } from '../../src/validators/candidate-profile.validator.js';
 import { parseCompaniesQuery } from '../../src/validators/companies.validator.js';
 import {
   parseJobId,
@@ -93,6 +94,30 @@ describe('parseJobId', () => {
     expect(parseJobId('42')).toBe(42);
     expect(() => parseJobId('abc')).toThrow(HttpError);
     expect(() => parseJobId('4.2')).toThrow(HttpError);
+  });
+});
+
+describe('parseCandidateProfile', () => {
+  it('trims text and turns blank fields into null', () => {
+    expect(
+      parseCandidateProfile({
+        currentTitle: ' Frontend Developer ',
+        yearsExperience: 3,
+        headline: '',
+      }),
+    ).toEqual({
+      headline: null,
+      currentTitle: 'Frontend Developer',
+      yearsExperience: 3,
+      location: null,
+      summary: null,
+    });
+  });
+
+  it('rejects a bad year count and overlong text', () => {
+    expect(() =>
+      parseCandidateProfile({ yearsExperience: 200, headline: 'x'.repeat(161) }),
+    ).toThrow(HttpError);
   });
 });
 
