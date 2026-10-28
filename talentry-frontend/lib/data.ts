@@ -1,6 +1,6 @@
 // UI job shape + URL query parsing. Data itself comes from the backend
 // (see lib/api.ts) — no mock rows here anymore.
-export type Job = { id: number; co: string; bg: string; ch: string; date: string; title: string; tags: string[]; min: number; max: number; loc: string; ind: string }
+export type Job = { id: number; url: string; co: string; bg: string; ch: string; date: string; title: string; tags: string[]; min: number; max: number; loc: string; ind: string }
 export interface RoleFacet { slug: string; label: string; count: number }
 
 /* ── Company-grouped jobs ───────────────────────────── */

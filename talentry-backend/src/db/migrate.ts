@@ -98,6 +98,23 @@ export async function runMigrations() {
     );
   `);
 
+  // Recommendations are written by talentry-career, but the API reads them here.
+  // Keep this in sync with talentry-career/src/db/schema.py.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_recommendations (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      rank INTEGER NOT NULL,
+      score DOUBLE PRECISION NOT NULL,
+      similarity DOUBLE PRECISION,
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, job_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_recommendations_user_rank
+      ON job_recommendations (user_id, rank);
+  `);
+
   // Interview prep is written by talentry-career, but the API reads it here.
   // Keep this in sync with talentry-career/src/db/schema.py.
   await pool.query(`
@@ -135,5 +152,98 @@ export async function runMigrations() {
     );
     CREATE INDEX IF NOT EXISTS idx_interview_responses_attempt
       ON interview_responses (attempt_id);
+  `);
+
+  // Application agent. talentry-career owns the worker and writes most of this;
+  // the API reads progress and records the user's answers, edits and approval.
+  // Keep this in sync with talentry-career/src/db/schema.py.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_applications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      batch_id UUID NOT NULL,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN (
+          'queued', 'in_progress', 'needs_input', 'pending_approval',
+          'approved', 'submitting', 'submitted', 'unconfirmed', 'failed',
+          'cancelled'
+        )),
+      platform TEXT,
+      apply_url TEXT,
+      options JSONB NOT NULL DEFAULT '{}'::jsonb,
+      plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+      attention JSONB NOT NULL DEFAULT '[]'::jsonb,
+      warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      browser_state JSONB,
+      approved_snapshot JSONB,
+      approved_at TIMESTAMPTZ,
+      submitted_at TIMESTAMPTZ,
+      result JSONB,
+      screenshot TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      heartbeat_at TIMESTAMPTZ,
+      run_after TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      UNIQUE (batch_id, job_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_applications_status
+      ON agent_applications (status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_applications_user
+      ON agent_applications (user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_applications_queue
+      ON agent_applications (status, run_after, created_at);
+
+    CREATE TABLE IF NOT EXISTS agent_application_documents (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      agent_application_id UUID NOT NULL
+        REFERENCES agent_applications(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (agent_application_id, kind, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_application_events (
+      id BIGSERIAL PRIMARY KEY,
+      agent_application_id UUID NOT NULL
+        REFERENCES agent_applications(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      message TEXT NOT NULL,
+      data JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_application_events_app
+      ON agent_application_events (agent_application_id, id);
+
+    CREATE TABLE IF NOT EXISTS applicant_answers (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      question_key TEXT NOT NULL,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, question_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      agent_application_id UUID
+        REFERENCES agent_applications(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      read_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_user
+      ON notifications (user_id, created_at DESC);
   `);
 }

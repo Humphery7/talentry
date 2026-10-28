@@ -1,9 +1,8 @@
-import { env } from '../config/env.js';
 import { pool } from '../db/pool.js';
 import { HttpError } from '../utils/http-error.js';
 import type { InterviewAnswer } from '../validators/interview.validator.js';
+import { postCareer } from './career.service.js';
 
-const CAREER_TIMEOUT_MS = 120_000;
 const MISSING_TABLE = '42P01';
 
 export interface SectionProgress {
@@ -123,40 +122,6 @@ function isMissingTable(err: unknown): boolean {
   return (err as { code?: string }).code === MISSING_TABLE;
 }
 
-async function callCareer<T>(path: string, payload: unknown): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${env.careerUrl}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(CAREER_TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.error('Interview service request failed:', err);
-    const timedOut = err instanceof Error && err.name === 'TimeoutError';
-    throw new HttpError(
-      timedOut ? 504 : 502,
-      timedOut
-        ? 'Interview service timed out.'
-        : 'Interview service is unavailable.',
-    );
-  }
-
-  const data = (await response.json().catch(() => null)) as {
-    detail?: unknown;
-  } | null;
-
-  if (!response.ok) {
-    const detail = data?.detail;
-    const message =
-      typeof detail === 'string' ? detail : 'Interview service error.';
-    throw new HttpError(response.status >= 500 ? 502 : response.status, message);
-  }
-
-  return data as T;
-}
-
 function attemptSql(where: string) {
   return `
     SELECT id, job_id AS "jobId", attempt_no AS "attemptNo", status, title,
@@ -193,7 +158,7 @@ export async function startAttempt(
   const job = await pool.query('SELECT id FROM jobs WHERE id = $1', [jobId]);
   if (!job.rowCount) throw new HttpError(404, 'Job not found.');
 
-  const result = await callCareer<CareerGenerateResult>('/interview/generate', {
+  const result = await postCareer<CareerGenerateResult>('/interview/generate', {
     user_id: userId,
     job_id: jobId,
     new_attempt: newAttempt,
@@ -299,7 +264,7 @@ export async function submitResponse(
   }
   if (!owned.rowCount) throw new HttpError(404, 'Interview attempt not found.');
 
-  return callCareer<CareerAnswerResult>('/interview/evaluate', {
+  return postCareer<CareerAnswerResult>('/interview/evaluate', {
     user_id: userId,
     attempt_id: attemptId,
     item_id: itemId,

@@ -1,4 +1,4 @@
 import type { Metadata } from 'next'
-import { Coach } from '@/components/Practice'
+import { CareerCoach } from '@/components/CareerCoach'
 export const metadata: Metadata = { title: 'Career Coach' }
-export default function Page() { return <Coach /> }
+export default function Page() { return <CareerCoach /> }

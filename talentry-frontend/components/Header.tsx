@@ -4,7 +4,8 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { clearSession, loadSession, type Session } from '@/lib/auth'
 import { Icon } from './ui'
-const NAV = [['/jobs', 'Find Jobs'], ['/companies', 'Companies'], ['/cv', 'AI CV Analysis'], ['/interview', 'Mock Interview'], ['/coach', 'Career Coach'], ['/about', 'About']]
+import Notifications from './Notifications'
+const NAV = [['/jobs', 'Find Jobs'], ['/applications', 'Applications'], ['/companies', 'Companies'], ['/cv', 'AI CV Analysis'], ['/interview', 'Mock Interview'], ['/coach', 'Career Coach'], ['/about', 'About']]
 export default function Header() {
   const path = usePathname()
   const [user, setUser] = useState<Session | null>(null)
@@ -31,7 +32,7 @@ export default function Header() {
       <nav aria-label="Primary">{NAV.map(([h, t]) => <Link key={h} href={h} aria-current={on(h) ? 'page' : undefined}>{t}</Link>)}</nav>
       <div className="acts">
         <button className="ib" aria-label="Messages"><Icon n="mail" /><span className="dot" /></button>
-        <button className="ib" aria-label="Notifications"><Icon n="bell" /></button>
+        <Notifications />
         {user
           ? <div className="account" ref={account}>
             <button className="av" aria-label="Account menu" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(v => !v)}>{user.name.slice(0, 1).toUpperCase()}</button>

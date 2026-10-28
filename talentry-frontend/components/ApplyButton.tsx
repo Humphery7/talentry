@@ -13,5 +13,5 @@ export default function ApplyButton({ jobId }: { jobId: number }) {
       setS(r.ok ? 'done' : 'err')
     } catch { setS('err') }
   }
-  return <button className="btn" disabled={s === 'busy' || s === 'done'} onClick={apply}>{{ idle: 'Apply now', busy: 'Sending…', done: 'Application sent', err: 'Failed, try again' }[s]}</button>
+  return <button className="btn" disabled={s === 'busy' || s === 'done'} onClick={apply}>{{ idle: 'Mark as applied', busy: 'Saving…', done: 'Application saved', err: 'Failed, try again' }[s]}</button>
 }

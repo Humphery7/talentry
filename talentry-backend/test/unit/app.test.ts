@@ -70,6 +70,9 @@ describe('protected routes', () => {
     ['GET', '/auth/profile'],
     ['GET', '/applications'],
     ['POST', '/applications'],
+    ['POST', '/agent-applications'],
+    ['GET', '/recommendations'],
+    ['POST', '/recommendations/refresh'],
     ['GET', '/interview/attempts'],
     ['POST', '/interview/attempts'],
     ['GET', '/interview/attempts/123e4567-e89b-42d3-a456-426614174000'],
@@ -128,6 +131,26 @@ describe('protected routes', () => {
       .send({ jobId: 'nope' });
     expect(res.status).toBe(400);
     expect(res.body.message).toEqual(['jobId must be an integer number']);
+  });
+
+  it('validates agent application job ids before calling the career service', async () => {
+    const empty = await request(app)
+      .post('/agent-applications')
+      .set(bearer)
+      .send({ jobIds: [] });
+    expect(empty.status).toBe(400);
+    expect(empty.body.message).toEqual([
+      'jobIds must contain at least 1 item',
+    ]);
+
+    const invalid = await request(app)
+      .post('/agent-applications')
+      .set(bearer)
+      .send({ jobIds: [7, '9'] });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.message).toEqual([
+      'jobIds must contain only integers greater than or equal to 1',
+    ]);
   });
 
   it('validates interview requests before touching the database', async () => {

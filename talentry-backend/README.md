@@ -12,6 +12,15 @@ REST API over the same Neon Postgres database the crawler writes.
 | `GET /candidate-profile`, `PUT /candidate-profile` | JWT | Read / save your optional career details |
 | `PUT /candidate-profile/cv`, `GET /candidate-profile/cv` | JWT | Upload a PDF CV / download its extracted text |
 | `POST /applications`, `GET /applications` | JWT | Apply to a job / list my applications |
+| `POST /agent-applications` | JWT | Queue selected jobs for Talentry's auto-apply agent |
+| `POST /agent-applications/queue-top` | JWT | Queue the best recommended jobs |
+| `GET /agent-applications`, `GET /agent-applications/:id` | JWT | List / inspect auto-apply progress |
+| `POST /agent-applications/:id/answers` | JWT | Answer questions that paused an application |
+| `POST /agent-applications/:id/approve`, `/retry`, `/cancel`, `/resume`, `/manual-complete` | JWT | Review and control an application |
+| `PUT /agent-applications/:id/fields`, `PUT /agent-applications/:id/documents/:kind` | JWT | Edit an answer or document before approval |
+| `POST /agent-applications/:id/documents/:kind/regenerate` | JWT | Regenerate a CV or cover letter |
+| `GET /notifications`, `POST /notifications/read` | JWT | Read / mark auto-apply notifications |
+| `GET /recommendations`, `POST /recommendations/refresh` | JWT | Read / regenerate your job recommendations |
 
 ## Run
 
@@ -27,7 +36,7 @@ npm run start:dev        # http://localhost:3001, restarts on file changes
 | `npm run start:dev` | Run and restart on changes |
 | `npm run build` then `npm run start:prod` | Compile to `dist/` and run the compiled JavaScript |
 | `npm test` | Unit tests (no database needed) |
-| `npm run embed:jobs` | Embed new/changed jobs for semantic matching (run after a crawl) |
+| `npm run embed:jobs` | Embed new/changed jobs now (also runs automatically on a schedule) |
 | `TEST_DATABASE_URL="postgresql://..." npm run test:e2e` | End-to-end tests against a real Postgres (see warning below) |
 | `npm run typecheck` / `npm run lint` / `npm run format` | Type-check, lint, auto-format |
 
@@ -41,11 +50,15 @@ npm run start:dev        # http://localhost:3001, restarts on file changes
 DATABASE_URL="postgresql://USER:PASSWORD@HOST/neondb?sslmode=require"
 JWT_SECRET="<long random string>"   # signs login tokens; changing it logs everyone out
 PORT=3001
-CAREER_API_URL="http://localhost:8000"  # internal Python service for interview prep
+CAREER_API_URL="http://localhost:8000"  # internal Python service for recommendations and interview prep
+EMBED_JOBS_INTERVAL_MINUTES=15          # automatic job embedding interval; 0 disables
 ```
 
-Interview prep calls `talentry-career` server-side; the browser never talks to it directly.
-Run that service separately and point `CAREER_API_URL` at it.
+Recommendations, interview prep, and agent applications call `talentry-career`
+server-side; the browser never talks to it directly. The agent routes queue jobs
+and proxy progress, answers, approval and retries to the career service. Document
+and field edits are written to the shared `agent_applications` tables. Run that
+service (and its auto-apply worker) separately and point `CAREER_API_URL` at it.
 
 Google sign-in is optional. Fill these in to enable it (otherwise leave blank and the
 endpoint just returns an error):
@@ -62,9 +75,10 @@ SESSION_SECRET="<long random string>"                      # signs the short-liv
 On startup the server creates the tables and adds missing columns, including the
 `vector` extension and the profile/job embedding columns. This is additive only, so the
 crawler is unaffected. Saving a profile or uploading a CV rebuilds the profile vector.
-`npm run embed:jobs` fills job vectors; a trigger clears a job's vector when the crawler
-changes its text, so rerun the command after a crawl. Vectors use
-`Xenova/all-MiniLM-L6-v2` (384 dimensions).
+Job vectors are filled incrementally at startup and every
+`EMBED_JOBS_INTERVAL_MINUTES` (default 15); a trigger clears a job's vector when the
+crawler changes its text, so the next run re-embeds it. `npm run embed:jobs` runs the
+same backfill immediately. Vectors use `Xenova/all-MiniLM-L6-v2` (384 dimensions).
 
 ## Folder structure
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HttpError } from '../../src/utils/http-error.js';
+import { parseAgentApply } from '../../src/validators/agent-applications.validator.js';
 import { parseApply } from '../../src/validators/applications.validator.js';
 import {
   parseLogin,
@@ -134,5 +135,23 @@ describe('parseCompaniesQuery / parseApply', () => {
     expect(() => parseApply({ jobId: 0 })).toThrow(HttpError);
     expect(() => parseApply({ jobId: '7' })).toThrow(HttpError);
     expect(() => parseApply({})).toThrow(HttpError);
+  });
+});
+
+describe('parseAgentApply', () => {
+  it('accepts a non-empty list of positive integers and removes duplicates', () => {
+    expect(parseAgentApply({ jobIds: [7, 9, 7] })).toEqual({
+      jobIds: [7, 9],
+    });
+  });
+
+  it('rejects missing, empty, non-integer and overlong lists', () => {
+    expect(() => parseAgentApply({})).toThrow(HttpError);
+    expect(() => parseAgentApply({ jobIds: [] })).toThrow(HttpError);
+    expect(() => parseAgentApply({ jobIds: [7, '9'] })).toThrow(HttpError);
+    expect(() => parseAgentApply({ jobIds: [0] })).toThrow(HttpError);
+    expect(() =>
+      parseAgentApply({ jobIds: Array.from({ length: 51 }, (_, i) => i + 1) }),
+    ).toThrow(HttpError);
   });
 });

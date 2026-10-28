@@ -10,7 +10,7 @@ export interface BackendCompany {
   foundedYear: number | null; openRoles?: number
 }
 export interface BackendJob {
-  id: number; title: string; locations: string[]; employmentType: string | null;
+  id: number; url: string; title: string; locations: string[]; employmentType: string | null;
   workplaceType: string | null; datePosted: string | null; lastSeenAt: string;
   salary: unknown; seniority: string | null; occupation: string | null;
   company: { slug: string; name: string | null; industry: string | null }
@@ -57,7 +57,7 @@ export function mapJob(b: BackendJob): Job {
   const [min, max] = salaryRange(b.salary)
   const lvl = b.seniority ? (LEVEL_LABEL[b.seniority.toLowerCase()] ?? b.seniority) : null
   return {
-    id: b.id, co, bg: bgFor(co), ch: initials(co),
+    id: b.id, url: b.url, co, bg: bgFor(co), ch: initials(co),
     date: fmtDate(b.datePosted ?? b.lastSeenAt), title: b.title ?? '(untitled)',
     tags: [prettyType(b.employmentType), b.workplaceType, lvl, b.occupation].filter(Boolean) as string[],
     min, max,

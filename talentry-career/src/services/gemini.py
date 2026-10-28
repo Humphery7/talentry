@@ -26,10 +26,11 @@ def generate_json(
     input: str,
     system_instruction: str,
     schema: dict[str, Any],
+    model: str | None = None,
 ) -> Any:
     """Ask Gemini for JSON that follows `schema` and parse it."""
     interaction = get_client().interactions.create(
-        model=settings.GEMINI_MODEL,
+        model=model or settings.GEMINI_MODEL,
         input=input,
         system_instruction=system_instruction,
         response_format={

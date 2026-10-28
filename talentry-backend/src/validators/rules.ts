@@ -67,6 +67,44 @@ export function requiredInteger(
   return value;
 }
 
+/** A required array of whole numbers. Duplicates are removed. */
+export function requiredIntegerArray(
+  input: Input,
+  field: string,
+  errors: string[],
+  { minItems = 0, maxItems = Infinity, min = -Infinity } = {},
+): number[] {
+  const value = input[field];
+  if (!Array.isArray(value)) {
+    errors.push(`${field} must be an array`);
+    return [];
+  }
+  if (value.length < minItems) {
+    errors.push(
+      `${field} must contain at least ${minItems} item${minItems === 1 ? '' : 's'}`,
+    );
+    return [];
+  }
+  if (value.length > maxItems) {
+    errors.push(`${field} must contain at most ${maxItems} items`);
+    return [];
+  }
+
+  const numbers: number[] = [];
+  for (const item of value) {
+    if (typeof item !== 'number' || !Number.isInteger(item) || item < min) {
+      errors.push(
+        min === -Infinity
+          ? `${field} must contain only integers`
+          : `${field} must contain only integers greater than or equal to ${min}`,
+      );
+      return [];
+    }
+    numbers.push(item);
+  }
+  return [...new Set(numbers)];
+}
+
 /** An optional string (query strings are always strings). */
 export function optionalString(
   input: Input,

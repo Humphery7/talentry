@@ -6,13 +6,15 @@ the trusted `user_id`; this service should only be reachable from the backend.
 
 from __future__ import annotations
 
-from typing import Any
-from uuid import UUID
-
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
 
 from db.connect import ConnectionDep
+from schemas.interview_api import (
+    AnswerRequest,
+    AnswerResult,
+    GenerateRequest,
+    GenerateResult,
+)
 from services.interview_evaluation import (
     AttemptNotFound,
     InvalidAnswer,
@@ -26,32 +28,6 @@ from services.interview_generation import (
 )
 
 router = APIRouter(prefix="/interview", tags=["interview"])
-
-
-class GenerateRequest(BaseModel):
-    user_id: UUID
-    job_id: int = Field(ge=1)
-    new_attempt: bool = False
-
-
-class GenerateResult(BaseModel):
-    attempt_id: UUID
-    created: bool
-
-
-class AnswerRequest(BaseModel):
-    user_id: UUID
-    attempt_id: UUID
-    item_id: str = Field(min_length=1, max_length=40)
-    answer: dict[str, Any]
-
-
-class AnswerResult(BaseModel):
-    itemId: str
-    score: int | None
-    feedback: dict[str, Any]
-    completed: bool
-    progress: dict[str, Any]
 
 
 @router.post("/generate", response_model=GenerateResult)

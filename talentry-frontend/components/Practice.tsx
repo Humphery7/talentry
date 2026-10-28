@@ -1,13 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 import { PageHead } from './ui'
-const ANS: Record<string, string> = { 'Salary negotiation': 'Anchor with market data, state a range whose bottom is your target, then pause.', 'Switching careers': 'Lead with transferable results, add one portfolio project in the new field, apply to adjacent roles.', 'Portfolio review': 'Show three projects: the problem, your role, and a measurable outcome.' }
-export function Coach() {
-  const [m, setM] = useState<[string, string][]>([['bot', 'Pick a topic for a quick playbook.']])
-  return (<div><PageHead title="Career coach" sub="Sample guidance. Connect your API for a live coach." />
-    <div className="panel"><div className="msgs">{m.map(([r, t], i) => <div key={i} className={'m1' + (r === 'me' ? ' me' : '')}>{t}</div>)}</div>
-      <div className="chips">{Object.keys(ANS).map(t => <button key={t} className="chip" onClick={() => setM(v => [...v, ['me', t], ['bot', ANS[t]]])}>{t}</button>)}</div></div></div>)
-}
 export function CV() {
   const [name, setName] = useState(''), [go, setGo] = useState(false), ref = useRef<HTMLInputElement>(null), C = 2 * Math.PI * 70
   useEffect(() => { const t = setTimeout(() => setGo(true), 80); return () => clearTimeout(t) }, [])

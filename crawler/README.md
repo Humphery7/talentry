@@ -56,7 +56,7 @@ The tests use fake API replies, so they run offline.
 | `output/` | `jobs.db` — *what we found* |
 | `src/.../models/` | `Board` / `Job` / `Company` shapes |
 | `src/.../config/` | Load the CSVs |
-| `src/.../ats/` | Greenhouse / Ashby / Lever adapters |
+| `src/.../ats/` | One adapter per full-API ATS (Greenhouse, Ashby, Lever, Pinpoint, Recruitee, Gem, Personio, Deel, HireHive, Traffit, Manatal, BambooHR, HiBob, Recruiter.co.kr, TalentReef, Cornerstone, Beehire, SeamlessHiring, CNStaff, Pay-Net, Universia, Comeet, Jarvi, Keka, NowHiring, TurboHire, Amazon, Curately, 51job, Welcome to the Jungle, Woowa, Accenture, AlmaCareer, Beisen, Hireology, Wecruit, BrassRing, ByteDance, d.vinci, eArcu, Fenbi) |
 | `src/.../labeling/` | Seniority / occupation / technology labels |
 | `src/.../storage/` | Database (SQLite fallback, Neon Postgres via `db.py` + `postgres.py`) |
 | `src/.../pipeline/` | The crawl, step by step |

@@ -27,7 +27,7 @@ class Board:
     company_slug: str
     board_slug: str
     board_url: str
-    monitor_type: str  # which ATS adapter reads it: "greenhouse", "ashby", "lever"
+    monitor_type: str  # which ATS adapter reads it: "greenhouse", "pinpoint", ...
     monitor_config: dict[str, Any] = field(default_factory=dict)
     scraper_type: str | None = None
     scraper_config: dict[str, Any] = field(default_factory=dict)

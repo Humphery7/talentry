@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import { getJob } from '@/lib/api'
 import ApplyButton from '@/components/ApplyButton'
+import AutoApplyButton from '@/components/AutoApplyButton'
 import { CompanyLogo } from '@/components/ui'
 type P = { params: Promise<{ id: string }> }
 export async function generateMetadata({ params }: P): Promise<Metadata> { const j = await getJob(+(await params).id); return { title: j ? `${j.title} at ${j.co}` : 'Job not found' } }
@@ -16,6 +17,8 @@ export default async function JobPage({ params }: P) {
         <div className="dl"><div>Salary<b>{job.min || job.max ? `$${job.min}K – $${job.max}K` : 'Not listed'}</b></div><div>Posted<b>{job.date || '—'}</b></div></div>
         <div className="tags" style={{ marginBottom: 24 }}>{job.tags.map(t => <span key={t}>{t}</span>)}</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          <AutoApplyButton jobId={job.id} />
+          <a href={job.url} target="_blank" rel="noreferrer" className="btn" style={{ textDecoration: 'none' }}>Apply on company site</a>
           <ApplyButton jobId={job.id} />
           <Link href={`/interview?jobId=${job.id}`} className="btn" style={{ textDecoration: 'none' }}>Interview prep</Link>
         </div>

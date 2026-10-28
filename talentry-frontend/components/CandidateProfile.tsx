@@ -36,9 +36,15 @@ function toDraft(profile?: CandidateProfile | null): Draft {
 }
 
 const skipKey = (email: string) => `tl-profile-skip:${email}`
+const PROFILE_EVENT = 'tl-profile'
+
+/** Tells every mounted profile hook that the saved profile has changed. */
+function announceProfile() {
+  window.dispatchEvent(new Event(PROFILE_EVENT))
+}
 
 /** Loads the session and the candidate profile (null when the user has none). */
-function useCandidateProfile() {
+export function useCandidateProfile() {
   const [user, setUser] = useState<Session | null>(null)
   const [profile, setProfile] = useState<CandidateProfile | null | undefined>(undefined)
 
@@ -55,11 +61,18 @@ function useCandidateProfile() {
       return
     }
     let alive = true
-    fetch('/api/candidate-profile', { headers: authHeaders(), cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : null))
-      .then(data => { if (alive) setProfile((data as CandidateProfile | null) ?? null) })
-      .catch(() => { if (alive) setProfile(null) })
-    return () => { alive = false }
+    const load = () => {
+      fetch('/api/candidate-profile', { headers: authHeaders(), cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => { if (alive) setProfile((data as CandidateProfile | null) ?? null) })
+        .catch(() => { if (alive) setProfile(null) })
+    }
+    load()
+    window.addEventListener(PROFILE_EVENT, load)
+    return () => {
+      alive = false
+      window.removeEventListener(PROFILE_EVENT, load)
+    }
   }, [user])
 
   return { user, profile, setProfile }
@@ -107,6 +120,7 @@ function ProfileForm({
       }
       setSaved(true)
       if (data) onSaved?.(data)
+      announceProfile()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save your profile.')
     } finally {
@@ -189,6 +203,7 @@ function CvUpload({
         throw new Error(reason || 'Could not upload your CV.')
       }
       if (data) onUploaded(data)
+      announceProfile()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not upload your CV.')
     } finally {
