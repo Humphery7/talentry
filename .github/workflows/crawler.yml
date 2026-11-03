@@ -4,6 +4,8 @@ on:
   schedule:
     # 00:00 UTC every day. GitHub cron is ALWAYS UTC — see the note in the PR/chat.
     - cron: "0 0 * * *"
+  push:
+    branches: [main]
   workflow_dispatch: {}
 
 permissions:
