@@ -23,7 +23,7 @@ from sqlalchemy.engine import Engine
 from talentry_crawler.models import Board, Company, Job
 
 from .db import get_database_url, get_engine, masked_url
-from .sqlite import _companies_fingerprint, _embedding_or_none
+from .sqlite import _companies_fingerprint, _embedding_or_none, _stored_description
 
 SCHEMA = """
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -130,10 +130,29 @@ ON CONFLICT (url) DO UPDATE SET
     technologies_json = EXCLUDED.technologies_json,
     embedding = COALESCE(EXCLUDED.embedding, jobs.embedding),
     embedding_text_hash = COALESCE(EXCLUDED.embedding_text_hash, jobs.embedding_text_hash),
-    embedding_updated_at = COALESCE(EXCLUDED.embedding_updated_at, jobs.embedding_updated_at),
-    status = 'open',
-    closed_at = NULL,
-    last_seen_at = EXCLUDED.last_seen_at
+    embedding_updated_at = COALESCE(EXCLUDED.embedding_updated_at, jobs.embedding_updated_at)
+-- Only rewrite a row when something the ATS/labeler produced actually changed.
+-- Rewriting every description on every crawl was generating hundreds of MB of
+-- WAL and dead TOAST data (Neon counts that against the project size limit).
+WHERE
+    jobs.company_slug IS DISTINCT FROM EXCLUDED.company_slug
+    OR jobs.board_slug IS DISTINCT FROM EXCLUDED.board_slug
+    OR jobs.monitor_type IS DISTINCT FROM EXCLUDED.monitor_type
+    OR jobs.title IS DISTINCT FROM EXCLUDED.title
+    OR jobs.description IS DISTINCT FROM EXCLUDED.description
+    OR jobs.locations_json IS DISTINCT FROM EXCLUDED.locations_json
+    OR jobs.employment_type IS DISTINCT FROM EXCLUDED.employment_type
+    OR jobs.workplace_type IS DISTINCT FROM EXCLUDED.workplace_type
+    OR jobs.date_posted IS DISTINCT FROM EXCLUDED.date_posted
+    OR jobs.salary_json IS DISTINCT FROM EXCLUDED.salary_json
+    OR jobs.metadata_json IS DISTINCT FROM EXCLUDED.metadata_json
+    OR jobs.seniority IS DISTINCT FROM EXCLUDED.seniority
+    OR jobs.occupation IS DISTINCT FROM EXCLUDED.occupation
+    OR jobs.technologies_json IS DISTINCT FROM EXCLUDED.technologies_json
+    OR (
+        EXCLUDED.embedding_text_hash IS NOT NULL
+        AND jobs.embedding_text_hash IS DISTINCT FROM EXCLUDED.embedding_text_hash
+    )
 """
 
 
@@ -223,7 +242,7 @@ class PostgresJobStore:
                             "board_slug": board.board_slug,
                             "monitor_type": board.monitor_type,
                             "title": job.title,
-                            "description": job.description,
+                            "description": _stored_description(job.description),
                             "locations_json": _json_or_none(job.locations),
                             "employment_type": job.employment_type,
                             "workplace_type": job.workplace_type,
@@ -240,6 +259,17 @@ class PostgresJobStore:
                         }
                         for job in jobs
                     ],
+                )
+            # SAVE_JOB skips unchanged content, so mark every job we saw as seen
+            # in a cheap second pass. This keeps last_seen_at (and therefore the
+            # close step below) accurate without rewriting descriptions.
+            if urls:
+                conn.execute(
+                    text(
+                        "UPDATE jobs SET last_seen_at = :now, status = 'open', closed_at = NULL "
+                        "WHERE board_slug = :b AND url = ANY(:urls)"
+                    ),
+                    {"now": now, "b": board.board_slug, "urls": sorted(urls)},
                 )
             closed = conn.execute(
                 text(

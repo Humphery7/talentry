@@ -4,6 +4,7 @@ import pytest
 
 from talentry_crawler.models import Company, Job
 from talentry_crawler.storage import JobStore
+from talentry_crawler.storage.sqlite import MAX_STORED_DESCRIPTION
 
 
 @pytest.fixture
@@ -19,6 +20,26 @@ def job(n: int, **extra) -> Job:
 
 def count(store: JobStore, status: str) -> int:
     return store._conn.execute("SELECT COUNT(*) FROM jobs WHERE status = ?", (status,)).fetchone()[0]
+
+
+def track_description_updates(store: JobStore) -> None:
+    """Count real rewrites of the (large) description column."""
+    store._conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS description_writes (n INTEGER NOT NULL);
+        DELETE FROM description_writes;
+        INSERT INTO description_writes VALUES (0);
+        CREATE TRIGGER IF NOT EXISTS track_description_update
+        AFTER UPDATE OF description ON jobs
+        BEGIN
+            UPDATE description_writes SET n = n + 1;
+        END;
+        """
+    )
+
+
+def description_writes(store: JobStore) -> int:
+    return store._conn.execute("SELECT n FROM description_writes").fetchone()[0]
 
 
 def test_first_save_inserts(store, board):
@@ -97,3 +118,29 @@ def test_embedding_is_kept_when_the_job_is_refreshed_without_one(store, board):
 
     row = store._conn.execute("SELECT embedding_json FROM jobs").fetchone()
     assert row["embedding_json"] == "[0.1,0.2,0.3]"
+
+
+def test_unchanged_content_is_not_rewritten(store, board):
+    track_description_updates(store)
+    store.save_board_jobs(board, [job(1, description="<p>same</p>")])
+    store.save_board_jobs(board, [job(1, description="<p>same</p>")])
+
+    assert description_writes(store) == 0
+
+
+def test_changed_content_is_still_rewritten(store, board):
+    track_description_updates(store)
+    store.save_board_jobs(board, [job(1, description="<p>old</p>")])
+    store.save_board_jobs(board, [job(1, description="<p>new</p>")])
+
+    assert description_writes(store) == 1
+    row = store._conn.execute("SELECT description FROM jobs").fetchone()
+    assert row["description"] == "<p>new</p>"
+
+
+def test_long_description_is_capped_before_storing(store, board):
+    long = "x" * (MAX_STORED_DESCRIPTION + 500)
+    store.save_board_jobs(board, [job(1, description=long)])
+
+    stored = store._conn.execute("SELECT description FROM jobs").fetchone()["description"]
+    assert len(stored) == MAX_STORED_DESCRIPTION

@@ -23,6 +23,18 @@ from talentry_crawler.models import Board, Company, Job
 
 DEFAULT_DB = OUTPUT_DIR / "jobs.db"
 
+# Job descriptions are the bulk of the database. The embedding step already
+# truncates at 4,000 chars; this keeps a longer copy for the job page without
+# letting a few huge HTML pages dominate storage.
+MAX_STORED_DESCRIPTION = 8_000
+
+
+def _stored_description(description: str | None) -> str | None:
+    if not description:
+        return None
+    return description[:MAX_STORED_DESCRIPTION]
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies (
     slug TEXT PRIMARY KEY,
@@ -105,10 +117,29 @@ ON CONFLICT(url) DO UPDATE SET
     technologies_json = excluded.technologies_json,
     embedding_json = COALESCE(excluded.embedding_json, jobs.embedding_json),
     embedding_text_hash = COALESCE(excluded.embedding_text_hash, jobs.embedding_text_hash),
-    embedding_updated_at = COALESCE(excluded.embedding_updated_at, jobs.embedding_updated_at),
-    status = 'open',
-    closed_at = NULL,
-    last_seen_at = excluded.last_seen_at
+    embedding_updated_at = COALESCE(excluded.embedding_updated_at, jobs.embedding_updated_at)
+-- Only rewrite a row when something the ATS/labeler produced actually changed.
+-- Rewriting every description on every crawl was generating hundreds of MB of
+-- WAL and dead TOAST data (Neon counts that against the project size limit).
+WHERE
+    jobs.company_slug IS NOT excluded.company_slug
+    OR jobs.board_slug IS NOT excluded.board_slug
+    OR jobs.monitor_type IS NOT excluded.monitor_type
+    OR jobs.title IS NOT excluded.title
+    OR jobs.description IS NOT excluded.description
+    OR jobs.locations_json IS NOT excluded.locations_json
+    OR jobs.employment_type IS NOT excluded.employment_type
+    OR jobs.workplace_type IS NOT excluded.workplace_type
+    OR jobs.date_posted IS NOT excluded.date_posted
+    OR jobs.salary_json IS NOT excluded.salary_json
+    OR jobs.metadata_json IS NOT excluded.metadata_json
+    OR jobs.seniority IS NOT excluded.seniority
+    OR jobs.occupation IS NOT excluded.occupation
+    OR jobs.technologies_json IS NOT excluded.technologies_json
+    OR (
+        excluded.embedding_text_hash IS NOT NULL
+        AND jobs.embedding_text_hash IS NOT excluded.embedding_text_hash
+    )
 """
 
 
@@ -124,6 +155,11 @@ def _embedding_or_none(value: list[float] | None) -> str | None:
     if not value:
         return None
     return json.dumps(value, separators=(",", ":"))
+
+
+def _chunked(values: list[str], size: int = 500) -> list[list[str]]:
+    """Keep SQLite's bound-variable count under its limit."""
+    return [values[i : i + size] for i in range(0, len(values), size)]
 
 
 def _companies_fingerprint(companies: list[Company]) -> str:
@@ -218,7 +254,7 @@ class JobStore:
                 "board_slug": board.board_slug,
                 "monitor_type": board.monitor_type,
                 "title": job.title,
-                "description": job.description,
+                "description": _stored_description(job.description),
                 "locations_json": _json_or_none(job.locations),
                 "employment_type": job.employment_type,
                 "workplace_type": job.workplace_type,
@@ -238,6 +274,18 @@ class JobStore:
 
         with self._conn:  # one transaction: all of it is saved, or none of it
             self._conn.executemany(SAVE_JOB, rows)
+            # SAVE_JOB skips unchanged content, so mark every job we saw as seen
+            # in a cheap second pass. This keeps last_seen_at (and therefore the
+            # close step below) accurate without rewriting descriptions.
+            for chunk in _chunked(sorted(urls)):
+                placeholders = ",".join("?" * len(chunk))
+                self._conn.execute(
+                    f"""
+                    UPDATE jobs SET last_seen_at = ?, status = 'open', closed_at = NULL
+                    WHERE board_slug = ? AND url IN ({placeholders})
+                    """,
+                    (now, board.board_slug, *chunk),
+                )
             # Everything we just saw has last_seen_at == now. Anything older was not on the page.
             closed = self._conn.execute(
                 """
