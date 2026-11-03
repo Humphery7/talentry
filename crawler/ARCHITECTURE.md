@@ -1,21 +1,21 @@
 # Crawler architecture
 
-One job: **read which boards to check → fetch their jobs → label them → save them.**
+One job: **read which boards to check → fetch their jobs → label them → embed them → save them.**
 
 Nothing else lives in this package. No website, no search index, no Redis.
 
 ## The flow (left → right)
 
 ```
- data/*.csv        ats            labeling         storage
-┌──────────┐    ┌──────────┐    ┌───────────┐    ┌───────────┐
-│  config  │ ─► │   ats    │ ─► │ labeling  │ ─► │  storage  │ ─► output/jobs.db
-│          │    │          │    │           │    │           │
-│ boards   │    │greenhouse│    │ seniority │    │ companies │
-│ companies│    │pinpoint  │    │ occupation│    │ jobs      │
-│ labels   │    │  ...     │    │ tech      │    │ (open /   │
-└──────────┘    └──────────┘    └───────────┘    │  closed)  │
-      ▲                                          └───────────┘
+ data/*.csv        ats            labeling         embeddings       storage
+┌──────────┐    ┌──────────┐    ┌───────────┐    ┌───────────┐    ┌───────────┐
+│  config  │ ─► │   ats    │ ─► │ labeling  │ ─► │ embeddings│ ─► │  storage  │ ─► Postgres
+│          │    │          │    │           │    │           │    │           │
+│ boards   │    │greenhouse│    │ seniority │    │ MiniLM    │    │ companies │
+│ companies│    │pinpoint  │    │ occupation│    │ 384 dims  │    │ jobs      │
+│ labels   │    │  ...     │    │ tech      │    │           │    │ (open /   │
+└──────────┘    └──────────┘    └───────────┘    └───────────┘    │  closed)  │
+      ▲                                                          └───────────┘
       │               pipeline/crawl.py runs these steps in order
       └──────────────  cli (how a human starts it)  ──────────────
 ```
@@ -25,7 +25,8 @@ Nothing else lives in this package. No website, no search index, no Redis.
 | 1 | `config/` | *Which* boards do we crawl, and *what words* do we label with? |
 | 2 | `ats/` | *How* do we talk to each ATS API? (one file per provider) |
 | 3 | `labeling/` | *What kind* of job is this? (seniority, occupation, technologies) |
-| 4 | `storage/` | *Where* do jobs live, and which ones have disappeared? |
+| 4 | `packages/talentry_embeddings/` | *What vector* represents this job? |
+| 5 | `storage/` | *Where* do jobs live, and which ones have disappeared? |
 | — | `pipeline/` | *In what order* do those steps run? |
 | — | `cli/` | *How* does a human start / inspect a run? |
 | — | `models/` | The shared shapes (`Board`, `Job`, `Company`) every layer passes around |
@@ -77,5 +78,6 @@ crawler/
 2. `pipeline` asks `ats.greenhouse` to fetch that board
 3. Greenhouse's API returns job JSON; `ats` turns each item into a `Job`
 4. `labeling` reads the title "Senior Backend Engineer" → `seniority=senior`, `occupation=backend-developer`, and finds `python`, `aws` in the description
-5. `storage` saves the job as `open`, and marks any earlier Stripe job that is no longer listed as `closed`
-6. Done. The website (future) reads the database.
+5. `embeddings` builds the job text and embeds it with the shared MiniLM model
+6. `storage` saves the job and vector as `open`, and marks any earlier Stripe job that is no longer listed as `closed`
+7. Done. The website (future) reads the database.

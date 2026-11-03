@@ -16,11 +16,9 @@
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "test:cov": "vitest run --config vitest.config.ts --coverage",
-    "test:e2e": "vitest run --config vitest.config.e2e.ts",
-    "embed:jobs": "tsx src/scripts/embed-jobs.ts"
+    "test:e2e": "vitest run --config vitest.config.e2e.ts"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^18.0.8",

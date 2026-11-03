@@ -29,9 +29,15 @@ def labeler():
     return Labeler(load_label_dictionaries())
 
 
-async def crawl(board, store, labeler, response: httpx.Response):
+def fake_embedder(texts):
+    return [[0.1] * 384 for _ in texts]
+
+
+async def crawl(board, store, labeler, response: httpx.Response, embedder=fake_embedder):
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: response)) as client:
-        return await crawl_one_board(board, client, labeler, store)
+        return await crawl_one_board(
+            board, client, labeler, store, embedder=embedder
+        )
 
 
 async def test_jobs_are_fetched_labeled_and_saved(board, store, labeler):
@@ -44,6 +50,8 @@ async def test_jobs_are_fetched_labeled_and_saved(board, store, labeler):
     assert row["occupation"] == "backend-developer"
     assert row["technologies_json"] == '["python", "aws"]'
     assert row["description"].startswith("<p>")
+    assert row["embedding_json"] is not None
+    assert row["embedding_text_hash"] is not None
 
 
 async def test_job_that_disappears_is_closed_on_next_run(board, store, labeler):
@@ -65,3 +73,32 @@ async def test_failed_fetch_changes_nothing(board, store, labeler):
 async def test_unknown_ats_name_is_rejected_before_any_work():
     with pytest.raises(ValueError, match="workday"):
         await crawl_boards(ats=["workday"])
+
+
+async def test_unchanged_jobs_are_not_embedded_again(board, store, labeler):
+    calls = []
+
+    def embedder(texts):
+        calls.append(len(texts))
+        return fake_embedder(texts)
+
+    reply = httpx.Response(200, json={"jobs": [greenhouse_job(1, "Backend Engineer")]})
+    await crawl(board, store, labeler, reply, embedder)
+    await crawl(board, store, labeler, reply, embedder)
+
+    assert calls == [1]
+
+
+async def test_changed_job_is_embedded_again(board, store, labeler):
+    calls = []
+
+    def embedder(texts):
+        calls.append(len(texts))
+        return fake_embedder(texts)
+
+    first = httpx.Response(200, json={"jobs": [greenhouse_job(1, "Backend Engineer")]})
+    second = httpx.Response(200, json={"jobs": [greenhouse_job(1, "Senior Backend Engineer")]})
+    await crawl(board, store, labeler, first, embedder)
+    await crawl(board, store, labeler, second, embedder)
+
+    assert calls == [1, 1]

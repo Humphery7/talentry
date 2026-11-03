@@ -36,7 +36,6 @@ npm run start:dev        # http://localhost:3001, restarts on file changes
 | `npm run start:dev` | Run and restart on changes |
 | `npm run build` then `npm run start:prod` | Compile to `dist/` and run the compiled JavaScript |
 | `npm test` | Unit tests (no database needed) |
-| `npm run embed:jobs` | Embed new/changed jobs now (also runs automatically on a schedule) |
 | `TEST_DATABASE_URL="postgresql://..." npm run test:e2e` | End-to-end tests against a real Postgres (see warning below) |
 | `npm run typecheck` / `npm run lint` / `npm run format` | Type-check, lint, auto-format |
 
@@ -50,8 +49,7 @@ npm run start:dev        # http://localhost:3001, restarts on file changes
 DATABASE_URL="postgresql://USER:PASSWORD@HOST/neondb?sslmode=require"
 JWT_SECRET="<long random string>"   # signs login tokens; changing it logs everyone out
 PORT=3001
-CAREER_API_URL="http://localhost:8000"  # internal Python service for recommendations and interview prep
-EMBED_JOBS_INTERVAL_MINUTES=15          # automatic job embedding interval; 0 disables
+CAREER_API_URL="http://localhost:8000"  # internal Python service for recommendations, interview prep, and profile embeddings
 ```
 
 Recommendations, interview prep, and agent applications call `talentry-career`
@@ -73,12 +71,10 @@ SESSION_SECRET="<long random string>"                      # signs the short-liv
 ```
 
 On startup the server creates the tables and adds missing columns, including the
-`vector` extension and the profile/job embedding columns. This is additive only, so the
-crawler is unaffected. Saving a profile or uploading a CV rebuilds the profile vector.
-Job vectors are filled incrementally at startup and every
-`EMBED_JOBS_INTERVAL_MINUTES` (default 15); a trigger clears a job's vector when the
-crawler changes its text, so the next run re-embeds it. `npm run embed:jobs` runs the
-same backfill immediately. Vectors use `Xenova/all-MiniLM-L6-v2` (384 dimensions).
+`vector` extension and the profile/job embedding columns. Saving a profile or uploading
+a CV asks `talentry-career` to rebuild the profile vector. Job vectors are written by
+the crawler in the same row as the job. Both use the shared Python embedding package
+(`sentence-transformers/all-MiniLM-L6-v2`, 384 dimensions).
 
 ## Folder structure
 

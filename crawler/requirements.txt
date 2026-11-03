@@ -1,0 +1,2 @@
+-e ../packages/talentry_embeddings
+-e .

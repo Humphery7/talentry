@@ -3,10 +3,6 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { runMigrations } from './db/migrate.js';
 import { pool } from './db/pool.js';
-import {
-  startJobEmbeddingSchedule,
-  stopJobEmbeddingSchedule,
-} from './services/job-embedding-scheduler.js';
 
 try {
   await runMigrations();
@@ -14,8 +10,6 @@ try {
   console.error('Could not prepare the database:', err);
   process.exit(1);
 }
-
-startJobEmbeddingSchedule();
 
 const server = createApp().listen(env.port, (err?: Error) => {
   if (err) {
@@ -27,7 +21,6 @@ const server = createApp().listen(env.port, (err?: Error) => {
 
 // Ctrl+C / deploy restarts: stop accepting requests, then close DB connections.
 function shutdown() {
-  stopJobEmbeddingSchedule();
   server.close(() => {
     void pool.end().then(() => process.exit(0));
   });

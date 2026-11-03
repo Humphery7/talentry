@@ -1,10 +1,11 @@
 """The crawl, start to finish. This file only decides the ORDER of things;
 the details live in the layer each step calls.
 
-    config    load companies, boards and label dictionaries from data/*.csv
-    ats       fetch one board's jobs from Greenhouse / Ashby / Lever
-    labeling  add seniority / occupation / technologies to each job
-    storage   save the jobs (and close the ones that disappeared)
+    config      load companies, boards and label dictionaries from data/*.csv
+    ats         fetch one board's jobs from Greenhouse / Ashby / Lever
+    labeling    add seniority / occupation / technologies to each job
+    embeddings  build the job text and add its vector
+    storage     save the jobs (and close the ones that disappeared)
 """
 
 from __future__ import annotations
@@ -19,8 +20,11 @@ import httpx
 from talentry_crawler.ats import REGISTRY, get_discoverer
 from talentry_crawler.config import load_boards, load_companies, load_label_dictionaries
 from talentry_crawler.labeling import Labeler
-from talentry_crawler.models import Board
+from talentry_crawler.models import Board, Job
 from talentry_crawler.storage import JobStore
+from talentry_embeddings import build_job_text, embed_texts, text_hash
+
+Embedder = Callable[[list[str]], list[list[float]]]
 
 
 @dataclass(slots=True)
@@ -46,6 +50,7 @@ async def crawl_boards(
     concurrency: int = 5,
     timeout: float = 30.0,
     on_progress: Callable[[BoardRunResult, int, int], None] | None = None,
+    embedder: Embedder | None = None,
 ) -> list[BoardRunResult]:
     """Crawl the selected boards and save what we find. One failing board never stops the rest.
 
@@ -65,7 +70,9 @@ async def crawl_boards(
     # 2. Where to save, and the tools each board will need
     store = JobStore(db_path)
     try:
-        store.save_companies(load_companies())
+        companies = load_companies()
+        store.save_companies(companies)
+        company_names = {company.slug: company.name for company in companies}
         labeler = Labeler(load_label_dictionaries())
         slots = asyncio.Semaphore(concurrency)  # limits how many boards are fetched at once
 
@@ -79,7 +86,14 @@ async def crawl_boards(
 
             async def run(index: int, board: Board) -> tuple[int, BoardRunResult]:
                 async with slots:
-                    return index, await crawl_one_board(board, client, labeler, store)
+                    return index, await crawl_one_board(
+                        board,
+                        client,
+                        labeler,
+                        store,
+                        company_name=company_names.get(board.company_slug),
+                        embedder=embedder,
+                    )
 
             tasks = [asyncio.create_task(run(i, b)) for i, b in enumerate(boards)]
             ordered: list[BoardRunResult | None] = [None] * len(boards)
@@ -96,9 +110,15 @@ async def crawl_boards(
 
 
 async def crawl_one_board(
-    board: Board, client: httpx.AsyncClient, labeler: Labeler, store: JobStore
+    board: Board,
+    client: httpx.AsyncClient,
+    labeler: Labeler,
+    store: JobStore,
+    *,
+    company_name: str | None = None,
+    embedder: Embedder | None = None,
 ) -> BoardRunResult:
-    """fetch -> label -> save, for one board. Errors are reported, not raised."""
+    """fetch -> label -> embed -> save, for one board. Errors are reported, not raised."""
     result = BoardRunResult(
         board_slug=board.board_slug,
         company_slug=board.company_slug,
@@ -109,6 +129,7 @@ async def crawl_one_board(
         jobs = await discover(board, client)
         for job in jobs:
             labeler.label(job)
+        await embed_jobs(board, jobs, company_name, store, embedder or embed_texts)
         inserted, updated, closed = store.save_board_jobs(board, jobs)
     except Exception as exc:  # noqa: BLE001 — one bad board must not stop the others
         # Nothing is saved or closed when the fetch fails, so a flaky site never wipes its jobs.
@@ -118,3 +139,44 @@ async def crawl_one_board(
     result.job_count = len(jobs)
     result.inserted, result.updated, result.closed = inserted, updated, closed
     return result
+
+
+async def embed_jobs(
+    board: Board,
+    jobs: list[Job],
+    company_name: str | None,
+    store: JobStore,
+    embedder: Embedder,
+) -> None:
+    """Fill each job's vector, skipping jobs whose embedding text is unchanged."""
+    existing = store.embedding_hashes(board)
+    pending: list[tuple[Job, str]] = []
+
+    for job in jobs:
+        text = build_job_text(
+            title=job.title,
+            description=job.description,
+            company_name=company_name,
+            locations=job.locations,
+            employment_type=job.employment_type,
+            workplace_type=job.workplace_type,
+            seniority=job.seniority,
+            occupation=job.occupation,
+            technologies=job.technologies,
+        )
+        digest = text_hash(text)
+        job.embedding_text_hash = digest
+        if text and existing.get(job.url) != digest:
+            pending.append((job, text))
+
+    if not pending:
+        return
+
+    vectors = await asyncio.to_thread(embedder, [text for _, text in pending])
+    if len(vectors) != len(pending):
+        raise RuntimeError(
+            f"Embedding model returned {len(vectors)} vectors for {len(pending)} jobs"
+        )
+
+    for (job, _), vector in zip(pending, vectors, strict=True):
+        job.embedding = vector

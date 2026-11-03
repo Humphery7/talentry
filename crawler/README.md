@@ -1,6 +1,6 @@
 # Talentry crawler
 
-Background worker: read `data/boards.csv` → fetch ATS APIs → label jobs → write Neon Postgres.
+Background worker: read `data/boards.csv` → fetch ATS APIs → label jobs → embed jobs → write Neon Postgres.
 
 **Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first** — it explains the folders and the flow.
 
@@ -10,8 +10,14 @@ Background worker: read `data/boards.csv` → fetch ATS APIs → label jobs → 
 cd crawler
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.txt
 ```
+
+Run this from `crawler/`; the shared package path is relative to it. Use
+`requirements.txt` instead when deploying without test dependencies.
+
+The first crawl downloads `sentence-transformers/all-MiniLM-L6-v2` (about 90 MB).
+Cache `~/.cache/huggingface` in GitHub Actions so later runs reuse it.
 
 Add your Neon connection string to `crawler/.env` (gitignored, never commit):
 
@@ -58,6 +64,7 @@ The tests use fake API replies, so they run offline.
 | `src/.../config/` | Load the CSVs |
 | `src/.../ats/` | One adapter per full-API ATS (Greenhouse, Ashby, Lever, Pinpoint, Recruitee, Gem, Personio, Deel, HireHive, Traffit, Manatal, BambooHR, HiBob, Recruiter.co.kr, TalentReef, Cornerstone, Beehire, SeamlessHiring, CNStaff, Pay-Net, Universia, Comeet, Jarvi, Keka, NowHiring, TurboHire, Amazon, Curately, 51job, Welcome to the Jungle, Woowa, Accenture, AlmaCareer, Beisen, Hireology, Wecruit, BrassRing, ByteDance, d.vinci, eArcu, Fenbi) |
 | `src/.../labeling/` | Seniority / occupation / technology labels |
+| shared `packages/talentry_embeddings/` | Job/profile text builders and the sentence-transformer model |
 | `src/.../storage/` | Database (SQLite fallback, Neon Postgres via `db.py` + `postgres.py`) |
 | `src/.../pipeline/` | The crawl, step by step |
 | `src/.../cli/` | `talentry-crawl` command |

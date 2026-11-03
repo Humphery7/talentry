@@ -1,0 +1,62 @@
+name: Crawler
+
+on:
+  schedule:
+    # 00:00 UTC every day. GitHub cron is ALWAYS UTC — see the note in the PR/chat.
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Never let two crawls write the same database at once.
+concurrency:
+  group: crawler
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: crawler
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      HF_HOME: ~/.cache/huggingface
+      TOKENIZERS_PARALLELISM: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            crawler/requirements*.txt
+            packages/talentry_embeddings/pyproject.toml
+
+      # ~90 MB MiniLM model: download once, reuse on every later run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-${{ runner.os }}
+          restore-keys: |
+            hf-all-MiniLM-L6-v2-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Crawl
+        run: talentry-crawl run --concurrency 10
+
+      - name: Report database stats
+        if: always()
+        run: |
+          echo "### Crawl stats" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          talentry-crawl stats >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

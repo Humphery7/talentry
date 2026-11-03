@@ -23,9 +23,11 @@ from sqlalchemy.engine import Engine
 from talentry_crawler.models import Board, Company, Job
 
 from .db import get_database_url, get_engine, masked_url
-from .sqlite import _companies_fingerprint
+from .sqlite import _companies_fingerprint, _embedding_or_none
 
 SCHEMA = """
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS companies (
     slug TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -53,6 +55,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     seniority TEXT,
     occupation TEXT,
     technologies_json TEXT,
+    embedding vector(384),
+    embedding_text_hash TEXT,
+    embedding_updated_at TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'open',
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
@@ -62,6 +67,8 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_slug);
 CREATE INDEX IF NOT EXISTS idx_jobs_board ON jobs(board_slug);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_embedding
+    ON jobs USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -95,12 +102,15 @@ INSERT INTO jobs (
     title, description, locations_json, employment_type, workplace_type,
     date_posted, salary_json, metadata_json,
     seniority, occupation, technologies_json,
+    embedding, embedding_text_hash, embedding_updated_at,
     status, first_seen_at, last_seen_at
 ) VALUES (
     :url, :company_slug, :board_slug, :monitor_type,
     :title, :description, :locations_json, :employment_type, :workplace_type,
     :date_posted, :salary_json, :metadata_json,
     :seniority, :occupation, :technologies_json,
+    CAST(:embedding AS vector), :embedding_text_hash,
+    CAST(:embedding_updated_at AS timestamptz),
     'open', :now, :now
 )
 ON CONFLICT (url) DO UPDATE SET
@@ -118,6 +128,9 @@ ON CONFLICT (url) DO UPDATE SET
     seniority = EXCLUDED.seniority,
     occupation = EXCLUDED.occupation,
     technologies_json = EXCLUDED.technologies_json,
+    embedding = COALESCE(EXCLUDED.embedding, jobs.embedding),
+    embedding_text_hash = COALESCE(EXCLUDED.embedding_text_hash, jobs.embedding_text_hash),
+    embedding_updated_at = COALESCE(EXCLUDED.embedding_updated_at, jobs.embedding_updated_at),
     status = 'open',
     closed_at = NULL,
     last_seen_at = EXCLUDED.last_seen_at
@@ -220,6 +233,9 @@ class PostgresJobStore:
                             "seniority": job.seniority,
                             "occupation": job.occupation,
                             "technologies_json": _json_or_none(job.technologies),
+                            "embedding": _embedding_or_none(job.embedding),
+                            "embedding_text_hash": job.embedding_text_hash,
+                            "embedding_updated_at": now if job.embedding else None,
                             "now": now,
                         }
                         for job in jobs
@@ -234,6 +250,18 @@ class PostgresJobStore:
             ).rowcount or 0
 
         return len(urls - known), len(urls & known), int(closed)
+
+    def embedding_hashes(self, board: Board) -> dict[str, str]:
+        """Return the embedding-text hash already stored for each job on a board."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT url, embedding_text_hash FROM jobs "
+                    "WHERE board_slug = :b AND embedding_text_hash IS NOT NULL"
+                ),
+                {"b": board.board_slug},
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
 
     # ---- reading (used by the CLI) ---------------------------------------
 

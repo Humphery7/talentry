@@ -52,6 +52,10 @@ class Job:
     occupation: str | None = None  # e.g. "frontend-developer"
     technologies: list[str] = field(default_factory=list)  # e.g. ["python", "aws"]
 
+    # Filled in by the embedding step, just before saving:
+    embedding: list[float] | None = None
+    embedding_text_hash: str | None = None
+
 
 @dataclass(slots=True)
 class LabelDictionaries:

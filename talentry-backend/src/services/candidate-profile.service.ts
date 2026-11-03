@@ -1,6 +1,6 @@
 import { pool } from '../db/pool.js';
 import type { CandidateProfileInput } from '../validators/candidate-profile.validator.js';
-import { createEmbedding } from './embedding.service.js';
+import { postCareer } from './career.service.js';
 
 const COLUMNS = `
   user_id AS "userId", headline, current_title AS "currentTitle",
@@ -10,43 +10,6 @@ const COLUMNS = `
 `;
 
 const SELECT = `SELECT ${COLUMNS} FROM candidate_profiles`;
-
-interface ProfileTextSource {
-  headline: string | null;
-  currentTitle: string | null;
-  yearsExperience: number | null;
-  location: string | null;
-  summary: string | null;
-  cvText: string | null;
-}
-
-// The embedding model only reads the first part of a long document anyway.
-const MAX_CV_TEXT = 8_000;
-
-/** Builds the text that represents a candidate. Null fields are left out. */
-export function buildProfileText(profile: ProfileTextSource): string {
-  const parts: string[] = [];
-
-  function add(label: string, value: string | null | undefined) {
-    const text = value?.trim();
-    if (text) parts.push(`${label}: ${text}`);
-  }
-
-  add('Headline', profile.headline);
-  add('Current title', profile.currentTitle);
-  if (profile.yearsExperience !== null) {
-    parts.push(`Years of experience: ${profile.yearsExperience}`);
-  }
-  add('Location', profile.location);
-  add('Summary', profile.summary);
-
-  const cvText = profile.cvText?.trim();
-  if (cvText) {
-    parts.push(`CV:\n${cvText.slice(0, MAX_CV_TEXT)}`);
-  }
-
-  return parts.join('\n\n');
-}
 
 /** Returns null when the user has not filled in a profile yet. */
 export async function get(userId: string) {
@@ -80,47 +43,16 @@ export async function save(userId: string, input: CandidateProfileInput) {
   return rows[0];
 }
 
-/**
- * Rebuilds the vector from the current profile fields and CV text. A failure
- * is logged but does not undo the profile save.
- */
+/** Lets the career service rebuild the profile vector from the saved row. */
 async function updateEmbedding(userId: string) {
   try {
-    await refreshProfileEmbedding(userId);
+    await postCareer<{ embedded: boolean }>(
+      `/profiles/${userId}/embedding`,
+      {},
+    );
   } catch (err) {
     console.error('Could not update profile embedding:', err);
   }
-}
-
-export async function refreshProfileEmbedding(userId: string) {
-  const { rows } = await pool.query(
-    `SELECT headline, current_title AS "currentTitle",
-            years_experience AS "yearsExperience", location, summary,
-            cv_data AS "cvText"
-     FROM candidate_profiles WHERE user_id = $1`,
-    [userId],
-  );
-  const profile = rows[0] as ProfileTextSource | undefined;
-  if (!profile) return;
-
-  const text = buildProfileText(profile);
-  if (!text) {
-    await pool.query(
-      `UPDATE candidate_profiles
-       SET profile_embedding = NULL, embedding_updated_at = now()
-       WHERE user_id = $1`,
-      [userId],
-    );
-    return;
-  }
-
-  const embedding = await createEmbedding(text);
-  await pool.query(
-    `UPDATE candidate_profiles
-     SET profile_embedding = $2::vector, embedding_updated_at = now()
-     WHERE user_id = $1`,
-    [userId, JSON.stringify(embedding)],
-  );
 }
 
 /** Replaces the user's CV. One CV per account for now. */

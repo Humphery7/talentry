@@ -1,0 +1,17 @@
+[project]
+name = "talentry-embeddings"
+version = "0.1.0"
+description = "Shared embedding model and text builders for Talentry"
+requires-python = ">=3.11"
+dependencies = [
+  "sentence-transformers==3.4.1",
+  "numpy<2",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["talentry_embeddings*"]

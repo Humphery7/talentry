@@ -85,3 +85,15 @@ def test_old_database_is_refused_with_a_clear_message(tmp_path):
     old.close()
     with pytest.raises(RuntimeError, match="older version"):
         JobStore(path)
+
+
+def test_embedding_is_kept_when_the_job_is_refreshed_without_one(store, board):
+    vector = [0.1, 0.2, 0.3]
+    store.save_board_jobs(
+        board,
+        [job(1, embedding=vector, embedding_text_hash="same")],
+    )
+    store.save_board_jobs(board, [job(1, embedding_text_hash="same")])
+
+    row = store._conn.execute("SELECT embedding_json FROM jobs").fetchone()
+    assert row["embedding_json"] == "[0.1,0.2,0.3]"

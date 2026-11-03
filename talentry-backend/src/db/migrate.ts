@@ -56,37 +56,17 @@ export async function runMigrations() {
     DROP INDEX IF EXISTS idx_jobs_id;
     -- Backs the role picker's open-job counts and the role filter.
     CREATE INDEX IF NOT EXISTS idx_jobs_status_occupation ON jobs(status, occupation);
-    -- Semantic search data. The crawler does not write these columns.
+    -- Semantic search data. The crawler writes these with each job.
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding vector(384);
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding_text_hash TEXT;
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_jobs_embedding
       ON jobs USING hnsw (embedding vector_cosine_ops);
   `);
-  // Re-embed a job after the crawler changes any text that goes into its vector.
+  // The crawler owns job embeddings now and writes them with the job row.
   await pool.query(`
-    CREATE OR REPLACE FUNCTION clear_job_embedding() RETURNS trigger AS $$
-    BEGIN
-      IF NEW.title IS DISTINCT FROM OLD.title
-        OR NEW.description IS DISTINCT FROM OLD.description
-        OR NEW.company_slug IS DISTINCT FROM OLD.company_slug
-        OR NEW.locations_json IS DISTINCT FROM OLD.locations_json
-        OR NEW.employment_type IS DISTINCT FROM OLD.employment_type
-        OR NEW.workplace_type IS DISTINCT FROM OLD.workplace_type
-        OR NEW.seniority IS DISTINCT FROM OLD.seniority
-        OR NEW.occupation IS DISTINCT FROM OLD.occupation
-        OR NEW.technologies_json IS DISTINCT FROM OLD.technologies_json
-      THEN
-        NEW.embedding = NULL;
-        NEW.embedding_updated_at = NULL;
-      END IF;
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-
     DROP TRIGGER IF EXISTS jobs_clear_embedding ON jobs;
-    CREATE TRIGGER jobs_clear_embedding
-      BEFORE UPDATE ON jobs
-      FOR EACH ROW EXECUTE FUNCTION clear_job_embedding();
+    DROP FUNCTION IF EXISTS clear_job_embedding() CASCADE;
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS applications (

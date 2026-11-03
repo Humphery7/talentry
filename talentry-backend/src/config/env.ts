@@ -28,10 +28,6 @@ export const env = {
     /\/$/,
     '',
   ),
-  // How often to embed new/changed jobs. 0 disables the schedule.
-  embedJobsIntervalMinutes: Number(
-    process.env.EMBED_JOBS_INTERVAL_MINUTES ?? 15,
-  ),
 };
 
 export const oidc_env = {

@@ -58,7 +58,7 @@ the missing scraper source rather than guessing.
 ## Current verified state
 
 - Registry: 41 API-only adapters in `ats/__init__.py`.
-- Tests: 69 passing.
+- Tests: 76 passing.
 - README adapter list is updated for the latest batch.
 - Latest batch added, registered, tested, and live-smoked:
   `brassring`, `bytedance`, `dvinci`, `earcu`, `fenbi`.
@@ -220,5 +220,5 @@ scraper-only, and API+scraper.
 If a provider requires a browser, scraper layer, or pipeline change, stop and
 explain the architectural impact before implementing it.
 
-Start by checking `git status`, confirming the 41 registry entries and 69 tests,
+Start by checking `git status`, confirming the 41 registry entries and 76 tests,
 then propose the next small batch with its classification and blockers.

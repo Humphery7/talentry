@@ -3,29 +3,32 @@
 Talentry is a job board. We crawl company career pages, turn the listings into
 something searchable, and put a site on top of it.
 
-It's really four things living in one repo:
+It's four services plus one shared package, all living in one repo:
 
 - **`crawler/`** — a Python worker that reads a list of companies and board URLs
   from a CSV, hits the ATS APIs behind them (Greenhouse, Ashby, Lever for now),
-  tags each job by seniority/occupation/technologies, and writes everything to
-  Postgres.
+  tags each job by seniority/occupation/technologies, embeds it, and writes
+  everything to Postgres.
+- **`packages/talentry_embeddings/`** — the shared Python package that builds job
+  and profile text and runs the MiniLM embedding model.
 - **`talentry-backend/`** — the Express API. It reads the crawler's jobs, and
-  owns the parts the crawler doesn't care about: user accounts, profiles,
-  applications, and job embeddings.
+  owns the parts the crawler doesn't care about: user accounts, profiles, and
+  applications.
 - **`talentry-career/`** — the FastAPI service that talks to Gemini for job
-  recommendations, interview prep, and the auto-apply agent. Only the backend
-  calls it.
+  recommendations, interview prep, and the auto-apply agent. It also embeds
+  candidate profiles. Only the backend calls it.
 - **`talentry-frontend/`** — the Next.js site. Job search, job pages, companies,
   saved jobs, profile/CV, career coach, and interview practice.
 
 All services share the same database, so there's no syncing between them — the
-crawler writes jobs, the backend reads and writes user data, and the career
-service writes recommendations, interview attempts, and agent applications.
+crawler writes jobs and their vectors, the backend reads and writes user data,
+and the career service writes profile vectors, recommendations, interview
+attempts, and agent applications.
 
 ```
-crawler (Python) ──writes──▶ Postgres ◀──reads/writes── backend (Express) ◀── frontend (Next.js)
-                                              │
-                                              └──server-side──▶ career (FastAPI)
+crawler (Python) ──writes jobs + vectors──▶ Postgres ◀──reads/writes── backend (Express) ◀── frontend (Next.js)
+                                                    │
+                                                    └──server-side──▶ career (FastAPI) ──writes profile vectors──▶ Postgres
 ```
 
 ## Running it locally
@@ -39,7 +42,7 @@ actually has something in it, then the backend, then the frontend.
 cd crawler
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.txt
 
 # put your Postgres connection string in crawler/.env
 echo 'DATABASE_URL="postgresql://user:pass@host/db?sslmode=require"' > .env
@@ -71,14 +74,15 @@ columns the career service relies on.
 cd talentry-career
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # .env needs DATABASE_URL and GEMINI_API_KEY
 uvicorn app:app --app-dir src --reload --port 8000
 ```
 
-The backend calls this service for recommendations, interview prep, and agent
-applications. Start it after the backend's first run so its schema exists.
+The backend calls this service for profile embeddings, recommendations, interview
+prep, and agent applications. Start it after the backend's first run so its schema
+exists.
 
 The auto-apply worker is a separate process. Run it alongside the API:
 

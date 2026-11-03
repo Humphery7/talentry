@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     seniority TEXT,
     occupation TEXT,
     technologies_json TEXT,
+    embedding_json TEXT,
+    embedding_text_hash TEXT,
+    embedding_updated_at TEXT,
     status TEXT NOT NULL DEFAULT 'open',
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
@@ -75,12 +78,14 @@ INSERT INTO jobs (
     title, description, locations_json, employment_type, workplace_type,
     date_posted, salary_json, metadata_json,
     seniority, occupation, technologies_json,
+    embedding_json, embedding_text_hash, embedding_updated_at,
     status, first_seen_at, last_seen_at
 ) VALUES (
     :url, :company_slug, :board_slug, :monitor_type,
     :title, :description, :locations_json, :employment_type, :workplace_type,
     :date_posted, :salary_json, :metadata_json,
     :seniority, :occupation, :technologies_json,
+    :embedding_json, :embedding_text_hash, :embedding_updated_at,
     'open', :now, :now
 )
 ON CONFLICT(url) DO UPDATE SET
@@ -98,6 +103,9 @@ ON CONFLICT(url) DO UPDATE SET
     seniority = excluded.seniority,
     occupation = excluded.occupation,
     technologies_json = excluded.technologies_json,
+    embedding_json = COALESCE(excluded.embedding_json, jobs.embedding_json),
+    embedding_text_hash = COALESCE(excluded.embedding_text_hash, jobs.embedding_text_hash),
+    embedding_updated_at = COALESCE(excluded.embedding_updated_at, jobs.embedding_updated_at),
     status = 'open',
     closed_at = NULL,
     last_seen_at = excluded.last_seen_at
@@ -110,6 +118,12 @@ def _now() -> str:
 
 def _json_or_none(value) -> str | None:
     return json.dumps(value) if value else None
+
+
+def _embedding_or_none(value: list[float] | None) -> str | None:
+    if not value:
+        return None
+    return json.dumps(value, separators=(",", ":"))
 
 
 def _companies_fingerprint(companies: list[Company]) -> str:
@@ -214,6 +228,9 @@ class JobStore:
                 "seniority": job.seniority,
                 "occupation": job.occupation,
                 "technologies_json": _json_or_none(job.technologies),
+                "embedding_json": _embedding_or_none(job.embedding),
+                "embedding_text_hash": job.embedding_text_hash,
+                "embedding_updated_at": now if job.embedding else None,
                 "now": now,
             }
             for job in jobs
@@ -231,6 +248,14 @@ class JobStore:
             ).rowcount
 
         return len(urls - known), len(urls & known), closed
+
+    def embedding_hashes(self, board: Board) -> dict[str, str]:
+        """Return the embedding-text hash already stored for each job on a board."""
+        rows = self._conn.execute(
+            "SELECT url, embedding_text_hash FROM jobs WHERE board_slug = ?",
+            (board.board_slug,),
+        ).fetchall()
+        return {row["url"]: row["embedding_text_hash"] for row in rows if row["embedding_text_hash"]}
 
     # ---- reading (used by the CLI) -------------------------------------------
 
