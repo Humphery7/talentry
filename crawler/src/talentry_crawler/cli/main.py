@@ -31,6 +31,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="SQLite path (default: Neon Postgres when DATABASE_URL is set in crawler/.env)",
     )
     run.add_argument("--concurrency", type=int, default=5, help="Boards fetched at once (default: 5)")
+    run.add_argument(
+        "--all-jobs",
+        action="store_true",
+        help="Store every job, not just tech / data / engineering roles",
+    )
     run.add_argument("--quiet", action="store_true", help="Only print the final summary")
 
     stats = commands.add_parser("stats", help="Show counts in the jobs database")
@@ -88,6 +93,8 @@ def _run(args: argparse.Namespace) -> int:
             scope += f" company={args.company}"
         if args.limit is not None:
             scope += f" limit={args.limit}"
+        if args.all_jobs:
+            scope += " all-jobs"
         print(f"crawling... ({scope})", flush=True)
 
     results = asyncio.run(
@@ -98,6 +105,7 @@ def _run(args: argparse.Namespace) -> int:
             db_path=args.db,
             concurrency=args.concurrency,
             on_progress=on_progress,
+            tech_only=not args.all_jobs,
         )
     )
     if not results:

@@ -55,19 +55,44 @@ async def test_jobs_are_fetched_labeled_and_saved(board, store, labeler):
 
 
 async def test_job_that_disappears_is_closed_on_next_run(board, store, labeler):
-    two = httpx.Response(200, json={"jobs": [greenhouse_job(1, "A"), greenhouse_job(2, "B")]})
-    one = httpx.Response(200, json={"jobs": [greenhouse_job(1, "A")]})
+    two = httpx.Response(
+        200,
+        json={"jobs": [greenhouse_job(1, "Backend Engineer"), greenhouse_job(2, "Data Engineer")]},
+    )
+    one = httpx.Response(200, json={"jobs": [greenhouse_job(1, "Backend Engineer")]})
     await crawl(board, store, labeler, two)
     result = await crawl(board, store, labeler, one)
     assert (result.job_count, result.updated, result.closed) == (1, 1, 1)
 
 
 async def test_failed_fetch_changes_nothing(board, store, labeler):
-    await crawl(board, store, labeler, httpx.Response(200, json={"jobs": [greenhouse_job(1, "A")]}))
+    await crawl(
+        board,
+        store,
+        labeler,
+        httpx.Response(200, json={"jobs": [greenhouse_job(1, "Backend Engineer")]}),
+    )
     result = await crawl(board, store, labeler, httpx.Response(500))
 
     assert result.error and "500" in result.error
     assert store.stats()["open_jobs"] == 1  # the site was down; its job is NOT closed
+
+
+async def test_non_tech_jobs_are_filtered_out(board, store, labeler):
+    reply = httpx.Response(
+        200,
+        json={
+            "jobs": [
+                greenhouse_job(1, "Senior Backend Engineer"),
+                greenhouse_job(2, "Account Executive"),
+            ]
+        },
+    )
+    result = await crawl(board, store, labeler, reply)
+
+    assert (result.job_count, result.inserted) == (1, 1)
+    rows = store._conn.execute("SELECT title FROM jobs").fetchall()
+    assert [row["title"] for row in rows] == ["Senior Backend Engineer"]
 
 
 async def test_unknown_ats_name_is_rejected_before_any_work():

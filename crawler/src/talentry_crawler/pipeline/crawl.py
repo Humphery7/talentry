@@ -4,6 +4,7 @@ the details live in the layer each step calls.
     config      load companies, boards and label dictionaries from data/*.csv
     ats         fetch one board's jobs from Greenhouse / Ashby / Lever
     labeling    add seniority / occupation / technologies to each job
+    filtering   keep only tech / data / engineering jobs
     embeddings  build the job text and add its vector
     storage     save the jobs (and close the ones that disappeared)
 """
@@ -21,6 +22,7 @@ from talentry_crawler.ats import REGISTRY, get_discoverer
 from talentry_crawler.config import load_boards, load_companies, load_label_dictionaries
 from talentry_crawler.labeling import Labeler
 from talentry_crawler.models import Board, Job
+from talentry_crawler.pipeline.tech_filter import is_tech_job
 from talentry_crawler.storage import JobStore
 from talentry_embeddings import build_job_text, embed_texts, text_hash
 
@@ -51,6 +53,7 @@ async def crawl_boards(
     timeout: float = 30.0,
     on_progress: Callable[[BoardRunResult, int, int], None] | None = None,
     embedder: Embedder | None = None,
+    tech_only: bool = True,
 ) -> list[BoardRunResult]:
     """Crawl the selected boards and save what we find. One failing board never stops the rest.
 
@@ -93,6 +96,7 @@ async def crawl_boards(
                         store,
                         company_name=company_names.get(board.company_slug),
                         embedder=embedder,
+                        tech_only=tech_only,
                     )
 
             tasks = [asyncio.create_task(run(i, b)) for i, b in enumerate(boards)]
@@ -117,8 +121,9 @@ async def crawl_one_board(
     *,
     company_name: str | None = None,
     embedder: Embedder | None = None,
+    tech_only: bool = True,
 ) -> BoardRunResult:
-    """fetch -> label -> embed -> save, for one board. Errors are reported, not raised."""
+    """fetch -> label -> filter -> embed -> save, for one board. Errors are reported, not raised."""
     result = BoardRunResult(
         board_slug=board.board_slug,
         company_slug=board.company_slug,
@@ -129,6 +134,8 @@ async def crawl_one_board(
         jobs = await discover(board, client)
         for job in jobs:
             labeler.label(job)
+        if tech_only:
+            jobs = [job for job in jobs if is_tech_job(job)]
         await embed_jobs(board, jobs, company_name, store, embedder or embed_texts)
         inserted, updated, closed = store.save_board_jobs(board, jobs)
     except Exception as exc:  # noqa: BLE001 — one bad board must not stop the others
