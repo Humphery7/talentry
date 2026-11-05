@@ -85,7 +85,7 @@ def _run(args: argparse.Namespace) -> int:
         stream = sys.stderr if result.error else sys.stdout
         print(line, file=stream, flush=True)
 
-    # Header first, so the terminal is never blank (total is unknown until
+    # header first, so the terminal is never blank (total is unknown until
     # boards.csv is filtered, so the pipeline reports per-board counts).
     if not args.quiet:
         scope = f"ats={','.join(ats)}"
