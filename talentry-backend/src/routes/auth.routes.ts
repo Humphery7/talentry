@@ -73,21 +73,17 @@ authRoutes.get('/google/callback', async (req: Request, res: Response) => {
     });
 
     const claims = tokens.claims();
-    const { user, accessToken } = await authService.loginWithGoogle({
+    const { accessToken } = await authService.loginWithGoogle({
       name: claims?.name as string | undefined,
       email: claims?.email as string | undefined,
     });
 
     // The handshake is done, so drop the short-lived session and hand the
     // browser our normal JWT. It travels in the URL hash, which is not sent to
-    // any server, and the frontend saves it and cleans the address bar.
-    const params = new URLSearchParams({
-      token: accessToken,
-      name: user.name,
-      email: user.email,
-    });
+    // any server. The frontend callback exchanges it for an httpOnly cookie.
+    const params = new URLSearchParams({ token: accessToken });
     req.session.destroy(() =>
-      res.redirect(`${oidc_env.frontend_url}/jobs#${params}`),
+      res.redirect(`${oidc_env.frontend_url}/auth/callback#${params}`),
     );
   } catch (err) {
     console.error('Google login failed:', err);

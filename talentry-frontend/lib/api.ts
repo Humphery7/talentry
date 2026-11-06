@@ -10,11 +10,13 @@ export interface BackendCompany {
   foundedYear: number | null; openRoles?: number
 }
 export interface BackendJob {
-  id: number; url: string; title: string; locations: string[]; employmentType: string | null;
+  id: number; url: string; title: string; description: string | null;
+  locations: string[]; employmentType: string | null;
   workplaceType: string | null; datePosted: string | null; lastSeenAt: string;
   salary: unknown; seniority: string | null; occupation: string | null;
   company: { slug: string; name: string | null; industry: string | null }
 }
+export type JobDetail = Job & { description: string | null }
 
 const prettyType = (t: string | null) =>
   !t ? null : t.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || null
@@ -104,11 +106,12 @@ export async function getRoleFacets(): Promise<RoleFacet[]> {
   }
 }
 
-export async function getJob(id: number): Promise<Job | undefined> {
+export async function getJob(id: number): Promise<JobDetail | undefined> {
   const r = await fetch(`${API_BASE}/jobs/${id}`, { cache: 'no-store' })
   if (r.status === 404) return undefined
   if (!r.ok) throw new Error(`Backend ${r.status}`)
-  return mapJob(await r.json() as BackendJob)
+  const b = await r.json() as BackendJob
+  return { ...mapJob(b), description: b.description ?? null }
 }
 
 export async function getCompanies(): Promise<BackendCompany[]> {

@@ -39,7 +39,12 @@ export default function Header() {
             {menu && <div className="usermenu" role="menu">
               <div className="uinfo"><b>{user.name}</b><span>{user.email}</span></div>
               <Link href="/profile" role="menuitem" className="usermenu-item" onClick={() => setMenu(false)}>Profile</Link>
-              <button type="button" role="menuitem" className="usermenu-item" onClick={() => { clearSession(); setMenu(false) }}>Sign out</button>
+              <button type="button" role="menuitem" className="usermenu-item" onClick={async () => {
+                clearSession()
+                setMenu(false)
+                await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
+                window.location.assign('/')
+              }}>Sign out</button>
             </div>}
           </div>
           : <Link href="/?auth=login" className="av" aria-label="Log in" style={{ textDecoration: 'none' }}>?</Link>}

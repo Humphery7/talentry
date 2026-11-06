@@ -8,10 +8,11 @@ import { Apple, Brand, Li } from './icons'
 function Field({ icon, right, ...p }: { icon: 'mail' | 'lock' | 'user'; right?: ReactNode } & React.InputHTMLAttributes<HTMLInputElement>) {
   return <label className="fld"><Li n={icon} /><input {...p} aria-label={p.placeholder} />{right}</label>
 }
-function Form({ mode, onClose }: { mode: 'login' | 'signup'; onClose: () => void }) {
-  const login = mode === 'login', router = useRouter()
+function Form({ mode, onClose, next }: { mode: 'login' | 'signup'; onClose: () => void; next: string }) {
+  const login = mode === 'login'
   const [f, setF] = useState({ name: '', email: '', password: '' }), [show, setShow] = useState(false), [err, setErr] = useState(''), [busy, setBusy] = useState(false)
   const up = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF(v => ({ ...v, [k]: e.target.value }))
+  const nextParam = next !== '/jobs' ? '&next=' + encodeURIComponent(next) : ''
   async function submit(e: FormEvent) {
     e.preventDefault(); setErr('')
     if (!login && !f.name.trim()) return setErr('Enter your full name.')
@@ -24,7 +25,7 @@ function Form({ mode, onClose }: { mode: 'login' | 'signup'; onClose: () => void
       if (!r.ok) throw new Error(d.error || (Array.isArray(d.message) ? d.message.join(', ') : d.message) || 'Something went wrong.')
       if (!d.accessToken || !d.user) throw new Error('Something went wrong.')
       saveSession({ token: d.accessToken, name: d.user.name, email: d.user.email })
-      router.push('/jobs')
+      window.location.assign(next)
     } catch (x) { setErr(x instanceof Error ? x.message : 'Network error.'); setBusy(false) }
   }
   return (
@@ -46,7 +47,7 @@ function Form({ mode, onClose }: { mode: 'login' | 'signup'; onClose: () => void
           <button type="button" onClick={() => setErr('Apple sign-in is not connected yet.')}><Apple />Apple</button>
         </div>
         <p className="sw">{login ? "Don't have an account?" : 'Already have an account?'}
-          <Link href={login ? '/?auth=signup' : '/?auth=login'} replace scroll={false}>{login ? 'Sign up' : 'Log in'}</Link></p>
+          <Link href={(login ? '/?auth=signup' : '/?auth=login') + nextParam} replace scroll={false}>{login ? 'Sign up' : 'Log in'}</Link></p>
       </form>
       <div className={'ap ' + mode} aria-hidden="true"><p>{login ? 'New opportunities await.' : 'Your goals matter here.'}</p><hr /></div>
     </div>
@@ -54,6 +55,8 @@ function Form({ mode, onClose }: { mode: 'login' | 'signup'; onClose: () => void
 }
 export default function AuthModal() {
   const sp = useSearchParams(), router = useRouter(), m = sp.get('auth'), ref = useRef<HTMLDialogElement>(null)
+  const requestedNext = sp.get('next')
+  const next = requestedNext && requestedNext.startsWith('/') && !requestedNext.startsWith('//') ? requestedNext : '/jobs'
   const mode = m === 'login' || m === 'signup' ? m : null
   useEffect(() => {
     const d = ref.current; if (!d) return
@@ -62,5 +65,5 @@ export default function AuthModal() {
     return () => { document.documentElement.style.overflow = '' }
   }, [mode])
   const close = () => router.replace('/', { scroll: false })
-  return <dialog ref={ref} className="lp-dlg" aria-label={mode === 'signup' ? 'Create your account' : 'Log in'} onClose={() => mode && close()} onClick={e => e.target === ref.current && close()}>{mode && <Form key={mode} mode={mode} onClose={close} />}</dialog>
+  return <dialog ref={ref} className="lp-dlg" aria-label={mode === 'signup' ? 'Create your account' : 'Log in'} onClose={() => mode && close()} onClick={e => e.target === ref.current && close()}>{mode && <Form key={mode} mode={mode} onClose={close} next={next} />}</dialog>
 }
