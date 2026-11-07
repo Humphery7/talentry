@@ -47,11 +47,6 @@ const FEATURES = [
 
 const PREVIEWS = [
   [
-    '/cv',
-    'CV analysis',
-    'Upload a CV and see a sample scorecard with suggestions.',
-  ],
-  [
     '/interview',
     'Mock interview',
     'Practise common questions and check how long your answers are.',

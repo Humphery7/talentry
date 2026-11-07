@@ -3,9 +3,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { clearSession, loadSession, type Session } from '@/lib/auth'
-import { Icon } from './ui'
 import Notifications from './Notifications'
-const NAV = [['/jobs', 'Find Jobs'], ['/applications', 'Applications'], ['/companies', 'Companies'], ['/cv', 'AI CV Analysis'], ['/interview', 'Mock Interview'], ['/coach', 'Career Coach'], ['/about', 'About']]
+const NAV = [['/jobs', 'Find Jobs'], ['/applications', 'Applications'], ['/companies', 'Companies'], ['/coach', 'Career Coach'], ['/about', 'About']]
 export default function Header() {
   const path = usePathname()
   const [user, setUser] = useState<Session | null>(null)
@@ -31,7 +30,6 @@ export default function Header() {
       <Link href="/" className="logo" style={{ textDecoration: 'none' }}><b>tale</b>ntry</Link>
       <nav aria-label="Primary">{NAV.map(([h, t]) => <Link key={h} href={h} aria-current={on(h) ? 'page' : undefined}>{t}</Link>)}</nav>
       <div className="acts">
-        <button className="ib" aria-label="Messages"><Icon n="mail" /><span className="dot" /></button>
         <Notifications />
         {user
           ? <div className="account" ref={account}>

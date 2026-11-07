@@ -51,7 +51,7 @@ export default function Notifications() {
   return (
     <div className="account" ref={box}>
       <button className="ib" aria-label={`Notifications${data.unread ? `, ${data.unread} unread` : ''}`} aria-haspopup="menu" aria-expanded={open} onClick={() => void toggle()}>
-        <Icon n="bell" />{data.unread > 0 && <span className="dot" />}
+        <Icon n="mail" />{data.unread > 0 && <span className="dot" />}
       </button>
       {open && (
         <div className="usermenu" role="menu" style={{ width: 320, maxHeight: 400, overflow: 'auto' }}>

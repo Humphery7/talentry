@@ -16,7 +16,8 @@
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "test:cov": "vitest run --config vitest.config.ts --coverage",
-    "test:e2e": "vitest run --config vitest.config.e2e.ts"
+    "test:e2e": "vitest run --config vitest.config.e2e.ts",
+    "db:cleanup": "tsx src/db/cleanup-cli.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

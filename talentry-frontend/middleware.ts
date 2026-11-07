@@ -43,8 +43,6 @@ export const config = {
     '/saved/:path*',
     '/profile',
     '/profile/:path*',
-    '/cv',
-    '/cv/:path*',
     '/interview',
     '/interview/:path*',
     '/coach',

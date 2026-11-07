@@ -1,0 +1,15 @@
+{
+  "name": "talentry",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n api,career,worker,tunnel -c blue,magenta,yellow,cyan \"npm:dev:api\" \"npm:dev:career\" \"npm:dev:worker\" \"npm:dev:tunnel\"",
+    "dev:api": "npm --prefix talentry-backend run start:dev",
+    "dev:career": "wait-on -t 120000 http://localhost:3001/ && cd talentry-career && AGENT_WORKER_ENABLED=0 PYTHONPATH=src .venv/bin/uvicorn app:app --app-dir src --reload --port 8100",
+    "dev:worker": "wait-on -t 120000 http://localhost:8100/health && cd talentry-career && PYTHONPATH=src .venv/bin/python -m services.agent_applications.worker",
+    "dev:tunnel": "ngrok http 3001 --url https://unmarshalled-ghoulishly-evelyn.ngrok-free.dev --log=stdout"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "wait-on": "^8.0.1"
+  }
+}

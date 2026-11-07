@@ -24,7 +24,7 @@ export const env = {
   jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-change-me',
   sessionSecret: process.env.SESSION_SECRET ?? 'dev-session-secret-change-me',
   // Internal Python service that generates and grades interview prep.
-  careerUrl: (process.env.CAREER_API_URL ?? 'http://localhost:8000').replace(
+  careerUrl: (process.env.CAREER_API_URL ?? 'http://localhost:8100').replace(
     /\/$/,
     '',
   ),

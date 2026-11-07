@@ -77,7 +77,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 # .env needs DATABASE_URL and GEMINI_API_KEY
-uvicorn app:app --app-dir src --reload --port 8000
+uvicorn app:app --app-dir src --reload --port 8100
 ```
 
 The backend calls this service for profile embeddings, recommendations, interview

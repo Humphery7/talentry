@@ -49,7 +49,7 @@ describe('agent applications service', () => {
     const result = await start('user-1', [7, 9]);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/agent-applications',
+      'http://localhost:8100/agent-applications',
       expect.objectContaining({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -203,7 +203,7 @@ describe('agent applications service', () => {
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(
-      'http://localhost:8000/agent-applications/app-1/answers?user_id=user-1',
+      'http://localhost:8100/agent-applications/app-1/answers?user_id=user-1',
     );
     expect(JSON.parse(init.body as string)).toEqual({
       answers: { q1: 'Yes' },

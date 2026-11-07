@@ -49,7 +49,7 @@ npm run start:dev        # http://localhost:3001, restarts on file changes
 DATABASE_URL="postgresql://USER:PASSWORD@HOST/neondb?sslmode=require"
 JWT_SECRET="<long random string>"   # signs login tokens; changing it logs everyone out
 PORT=3001
-CAREER_API_URL="http://localhost:8000"  # internal Python service for recommendations, interview prep, and profile embeddings
+CAREER_API_URL="http://localhost:8100"  # internal Python service for recommendations, interview prep, and profile embeddings
 ```
 
 Recommendations, interview prep, and agent applications call `talentry-career`

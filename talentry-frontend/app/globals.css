@@ -201,8 +201,6 @@ h1{font-weight:400;margin:68px 0 20px}.stats{color:#a3a3a8;padding-left:12px}
 .prev{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--mute);background:var(--field);border-radius:99px;padding:2px 8px;margin-left:8px;vertical-align:2px}
 .about-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:48px}.about-cta .btn{width:auto;padding:0 28px;text-decoration:none}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:24px}
-.ring{width:170px;height:170px;margin:auto}.ring circle{fill:none;stroke-width:12;stroke-linecap:round}.ring .tr{stroke:var(--line)}.ring .pr{stroke:var(--ink);transition:stroke-dashoffset 1.2s var(--ease)}
-.tip{display:grid;gap:2px;padding:14px 0;border-top:1px solid var(--line)}.tip span{color:var(--mute);font-size:14px}
 .bar{height:6px;border-radius:9px;background:var(--line);overflow:hidden}.bar i{display:block;height:100%;background:var(--ink);transform-origin:left;transition:transform .5s var(--ease)}
 textarea.f{height:160px;padding:16px;resize:vertical;line-height:1.5;margin:14px 0}
 .msgs{display:grid;gap:10px;margin:18px 0}.m1{background:var(--field);padding:12px 16px;border-radius:16px;max-width:85%}.m1.me{background:var(--accent);color:var(--on-accent);justify-self:end}

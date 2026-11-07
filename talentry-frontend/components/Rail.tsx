@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Icon } from './ui'
-const L = [['user', '/about', 'About'], ['bm', '/saved', 'Saved jobs'], ['file', '/cv', 'CV analysis'], ['cal', '/interview', 'Mock interview'], ['clock', '/coach', 'Career coach']] as const
+const L = [['user', '/about', 'About'], ['bm', '/saved', 'Saved jobs'], ['clock', '/coach', 'Career coach']] as const
 export default function Rail() {
   const path = usePathname()
   const theme = () => { const r = document.documentElement, n = r.dataset.theme === 'dark' ? 'light' : 'dark'; r.dataset.theme = n; try { localStorage.setItem('tl-theme', n) } catch {} }

@@ -205,7 +205,7 @@ describe('interview answer submission', () => {
 
     expect(result.progress.percent).toBe(100);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('http://localhost:8000/interview/evaluate');
+    expect(url).toBe('http://localhost:8100/interview/evaluate');
     expect(JSON.parse(init.body as string)).toMatchObject({
       user_id: 'user-1',
       attempt_id: 'attempt-1',

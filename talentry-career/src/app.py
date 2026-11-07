@@ -8,6 +8,7 @@ from routes.agent_applications import router as agent_applications_router
 from routes.interview import router as interview_router
 from routes.profiles import router as profiles_router
 from routes.recommendations import router as recommendations_router
+from services.agent_applications.supervisor import WorkerSupervisor
 
 
 @asynccontextmanager
@@ -21,7 +22,15 @@ async def lifespan(app: FastAPI):
             ensure_schema(conn)
 
         app.state.pool = pool
-        yield
+
+        # The auto-apply worker is a separate process; start it here so a
+        # deployment that only runs this app still processes the queue.
+        worker = WorkerSupervisor()
+        worker.start()
+        try:
+            yield
+        finally:
+            await worker.stop()
     finally:
         pool.close()
 

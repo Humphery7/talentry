@@ -32,7 +32,7 @@ describe('candidate profile service', () => {
 
     expect(result).toEqual({ userId: 'user-1' });
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/profiles/user-1/embedding',
+      'http://localhost:8100/profiles/user-1/embedding',
       expect.objectContaining({ method: 'POST', body: '{}' }),
     );
   });

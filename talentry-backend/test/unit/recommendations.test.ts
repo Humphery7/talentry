@@ -53,7 +53,7 @@ describe('recommendations service', () => {
     const result = await get('user-1');
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/recommendations/user-1',
+      'http://localhost:8100/recommendations/user-1',
       expect.objectContaining({ method: 'GET' }),
     );
     expect(result.data).toEqual(list);
@@ -86,12 +86,12 @@ describe('recommendations service', () => {
       string,
       RequestInit,
     ];
-    expect(refreshUrl).toBe('http://localhost:8000/recommendations/user-1');
+    expect(refreshUrl).toBe('http://localhost:8100/recommendations/user-1');
     expect(refreshInit.method).toBe('POST');
     expect(refreshInit.body).toBe('{}');
 
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
-      'http://localhost:8000/recommendations/user-1',
+      'http://localhost:8100/recommendations/user-1',
     );
     expect(result.data).toEqual(list);
     expect(result.meta.profileChanged).toBe(false);
