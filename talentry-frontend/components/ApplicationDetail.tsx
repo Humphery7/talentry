@@ -98,6 +98,7 @@ export default function ApplicationDetail({ id }: { id: string }) {
           {item.why && <p className="m">{item.why}</p>}
           <p className="m" style={{ margin: '8px 0 16px' }}>
             Talentry cannot complete this in its own browser. You can finish it on the employer’s site yourself, or retry once it is sorted.
+            {filled.length > 0 && ' Use “Copy my details” below so you do not have to retype everything.'}
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
             {employerUrl && <a className="btn" style={{ width: 'auto', padding: '0 24px', textDecoration: 'none' }} href={employerUrl} target="_blank" rel="noreferrer">Open employer’s page</a>}
@@ -106,6 +107,10 @@ export default function ApplicationDetail({ id }: { id: string }) {
           </div>
         </div>
       ))}
+
+      {filled.length > 0 && ['needs_input', 'pending_approval', 'unconfirmed', 'failed'].includes(data.status) && (
+        <CopyDetails fields={filled} />
+      )}
 
       {data.warnings.length > 0 && (
         <div className="panel" role="status" style={{ marginTop: 16 }}>
@@ -145,6 +150,7 @@ export default function ApplicationDetail({ id }: { id: string }) {
                 key={`${kind}-${document.version}`}
                 kind={kind}
                 document={document}
+                title={`${data.jobTitle ?? 'Application'} — ${kind === 'cv' ? 'CV' : 'Cover letter'}`}
                 disabled={!editable || busy}
                 onSave={(content) => act(`/documents/${kind}`, 'PUT', { content })}
                 onRegenerate={() => act(`/documents/${kind}/regenerate`, 'POST', {}, 'Regenerate this document? Your edits to the current version are kept as a previous version.')}
@@ -204,6 +210,43 @@ export default function ApplicationDetail({ id }: { id: string }) {
           ))}
         </ul>
       </details>
+    </div>
+  )
+}
+
+function CopyDetails({ fields }: { fields: Field[] }) {
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const text = fields
+    .filter(field => field.kind !== 'file' && field.value.trim())
+    .map(field => `${field.label}: ${field.value}`)
+    .join('\n')
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied('done')
+    } catch {
+      setCopied('failed')
+    }
+  }
+
+  return (
+    <div className="panel" style={{ marginTop: 16 }}>
+      <b>Applying yourself?</b>
+      <p className="m" style={{ margin: '6px 0 12px' }}>
+        Copy the details Talentry filled, then paste them into the employer’s form. You only need this when a CAPTCHA or a login stops the agent.
+      </p>
+      <button className="chip" disabled={!text} onClick={() => void copy()}>Copy my details</button>
+      {copied === 'done' && <span className="m" role="status" style={{ marginLeft: 10 }}>Copied.</span>}
+      {copied === 'failed' && (
+        <textarea
+          className="f"
+          readOnly
+          value={text}
+          aria-label="Details to copy"
+          style={{ height: 160, marginTop: 12 }}
+        />
+      )}
     </div>
   )
 }
@@ -276,9 +319,10 @@ function FieldRow({ field, disabled, onSave }: { field: Field; disabled: boolean
   )
 }
 
-function DocEditor({ kind, document, disabled, onSave, onRegenerate }: {
+function DocEditor({ kind, document, title, disabled, onSave, onRegenerate }: {
   kind: 'cv' | 'cover_letter'
   document: NonNullable<Detail['documents']['cv']>
+  title: string
   disabled: boolean
   onSave: (content: string) => void
   onRegenerate: () => void
@@ -292,9 +336,84 @@ function DocEditor({ kind, document, disabled, onSave, onRegenerate }: {
       <textarea className="f" style={{ height: 320, fontFamily: 'inherit' }} value={text} disabled={disabled} onChange={event => setText(event.target.value)} aria-label={`${name} text`} />
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <button className="chip" disabled={disabled || text === document.content || !text.trim()} onClick={() => onSave(text)}>Save as new version</button>
+        <button className="chip" disabled={!text.trim()} onClick={() => printDocument(text, title)}>Download PDF</button>
         <button className="chip" disabled={disabled} onClick={onRegenerate}>Regenerate</button>
       </div>
-      <p className="m" style={{ marginTop: 10 }}>The approved version is the one that gets uploaded. Earlier versions are kept ({document.versions.length} so far).</p>
+      <p className="m" style={{ marginTop: 10 }}>
+        Download opens your browser’s print dialog — choose “Save as PDF”. The approved version is the one that gets uploaded. Earlier versions are kept ({document.versions.length} so far).
+      </p>
     </div>
   )
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** Render the small Markdown subset used by the generated documents. */
+function documentHtml(text: string, title: string) {
+  const parts: string[] = []
+  let inList = false
+  for (const raw of text.split('\n')) {
+    const line = raw.trimEnd()
+    const item = line.startsWith('- ')
+    if (inList && !item) {
+      parts.push('</ul>')
+      inList = false
+    }
+    if (item) {
+      if (!inList) {
+        parts.push('<ul>')
+        inList = true
+      }
+      parts.push(`<li>${escapeHtml(line.slice(2))}</li>`)
+      continue
+    }
+    if (!line) continue
+    const heading = /^(#{1,3}) (.*)$/.exec(line)
+    if (heading) {
+      const level = heading[1].length
+      parts.push(`<h${level}>${escapeHtml(heading[2])}</h${level}>`)
+      continue
+    }
+    const italic = /^_(.*)_$/.exec(line)
+    if (italic) {
+      parts.push(`<p><i>${escapeHtml(italic[1])}</i></p>`)
+      continue
+    }
+    parts.push(`<p>${escapeHtml(line)}</p>`)
+  }
+  if (inList) parts.push('</ul>')
+  const css =
+    'body{font:10.5pt/1.4 Helvetica,Arial,sans-serif;color:#111;margin:0}'
+    + 'h1{font-size:20pt;margin:0 0 4px}'
+    + 'h2{font-size:12pt;border-bottom:1px solid #999;margin:14px 0 6px;text-transform:uppercase}'
+    + 'h3{font-size:10.5pt;margin:8px 0 2px}'
+    + 'p{margin:3px 0}'
+    + 'ul{margin:2px 0 6px 18px;padding:0}'
+    + '@page{margin:18mm 16mm}'
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${css}</style></head><body>${parts.join('')}</body></html>`
+}
+
+function printDocument(text: string, title: string) {
+  const win = window.open('', '_blank')
+  if (!win) {
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${title}.md`
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    return
+  }
+  win.document.open()
+  win.document.write(documentHtml(text, title))
+  win.document.close()
+  win.focus()
+  window.setTimeout(() => win.print(), 250)
 }

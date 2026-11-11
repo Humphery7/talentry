@@ -31,6 +31,41 @@ from .form import build_observation
 
 DONE_STATUSES = {"filled", "draft", "user", "saved", "document"}
 
+# Values the site may reformat (e.g. "Lagos, Nigeria" -> "Lagos, Lagos,
+# Nigeria"). Choice and file fields are deliberately excluded: changing those
+# without the candidate's approval would submit something they did not pick.
+_ADOPTABLE_KINDS = {
+    "text",
+    "textarea",
+    "email",
+    "tel",
+    "url",
+    "number",
+    "date",
+    "search",
+}
+
+
+def _value_text(value: str, sensitive: bool = False) -> str:
+    text = (value or "").strip()
+    if not text:
+        return "nothing"
+    if sensitive:
+        return "a different value"
+    return f"“{text[:80]}”"
+
+
+def _same_answer(expected: str, actual: str) -> bool:
+    """True when the site only reformatted the value we filled in."""
+    expected_words = set(facts.normalize(expected).split())
+    actual_words = set(facts.normalize(actual).split())
+    if not expected_words or not actual_words:
+        return False
+    if not expected_words.issubset(actual_words):
+        return False
+    return len(actual) <= len(expected) * 3 + 40
+
+
 DECIDE_SYSTEM = """You fill one job application form for a candidate.
 You get the form fields, the candidate's known facts, the available documents,
 the job description, and any feedback from the last attempt.
@@ -534,6 +569,23 @@ class Agent:
                 entry.value
             )
         return facts.normalize(field.value) == facts.normalize(entry.value)
+
+    def adopt_site_value(self, field: FormField, entry: PlanField) -> bool:
+        """Keep a value the site only reformatted instead of failing."""
+        if (
+            field.sensitive
+            or entry.status == "skipped"
+            or field.kind not in _ADOPTABLE_KINDS
+            or not _same_answer(entry.value, field.value)
+        ):
+            return False
+        entry.value = field.value
+        if not entry.note:
+            entry.note = "The employer’s site formatted this."
+        self.warn(
+            f"The site formatted “{field.label}”. I kept what the site shows."
+        )
+        return True
 
     async def apply_entry(self, field: FormField, entry: PlanField) -> None:
         if entry.doc and entry.doc not in self.pinned:
@@ -1161,9 +1213,12 @@ class Agent:
             observation = build_observation(inspection)
             self.check_blockers(observation)
             todo = await self.settle(observation, only_approved=True)
-            if any(field.required for field in todo):
+            missing = [field.label for field in todo if field.required]
+            if missing:
                 raise FormChanged(
-                    "The form asks for new required information."
+                    "The site now requires: "
+                    + ", ".join(f"“{name}”" for name in missing[:5])
+                    + "."
                 )
             next_button = self._next(observation)
             if not next_button:
@@ -1176,21 +1231,30 @@ class Agent:
         observation = build_observation(inspection)
         self.check_blockers(observation)
         todo = await self.settle(observation, only_approved=True)
-        if any(field.required for field in todo):
+        missing = [field.label for field in todo if field.required]
+        if missing:
             raise FormChanged(
-                "The form asks for new required information."
+                "The site now requires: "
+                + ", ".join(f"“{name}”" for name in missing[:5])
+                + "."
             )
 
         for field in observation.fields:
             entry = self.fields.get(field.key)
-            if (
+            if not (
                 entry
                 and entry.status in DONE_STATUSES
                 and not self.matches(field, entry)
             ):
-                raise FormChanged(
-                    f"“{field.label}” changed before submission."
-                )
+                continue
+            if self.adopt_site_value(field, entry):
+                continue
+            raise FormChanged(
+                f"“{field.label}” changed before submission: "
+                f"I filled {_value_text(entry.value, field.sensitive)}, "
+                "but the site now shows "
+                f"{_value_text(field.value, field.sensitive)}."
+            )
 
         if observation.signals.captcha:
             raise NeedsManual(
@@ -1237,6 +1301,7 @@ class Agent:
             ).decode("ascii")
 
             if observation.signals.confirmation and not observation.fields:
+                self.checkpoint()
                 store.finish(
                     self.conn,
                     self.application_id,

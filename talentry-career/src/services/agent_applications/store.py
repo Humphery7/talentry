@@ -523,6 +523,19 @@ def get_for_user(
         return cur.fetchone()
 
 
+def open_questions(attention: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Questions the candidate still has to answer.
+
+    Manual notes (a CAPTCHA, a form that changed) are information, not
+    questions. They must never block approval.
+    """
+    return [
+        item
+        for item in attention
+        if item.get("kind") == "question" and item.get("answer") is None
+    ]
+
+
 def approve(
     conn: psycopg.Connection,
     application_id: UUID | str,
@@ -533,9 +546,19 @@ def approve(
         raise NotFound()
     if row["status"] != AgentApplicationStatus.pending_approval.value:
         raise InvalidState("This application is not ready for approval.")
-    attention = list(row.get("attention") or [])
-    if any(item.get("answer") is None for item in attention):
-        raise InvalidState("Answer all questions before approving.")
+
+    # Manual notes are cleared on approval; real questions are not.
+    attention = [
+        item
+        for item in (row.get("attention") or [])
+        if item.get("kind") != "manual"
+    ]
+    pending_questions = open_questions(attention)
+    if pending_questions:
+        listed = "; ".join(
+            f"“{item.get('question')}”" for item in pending_questions[:3]
+        )
+        raise InvalidState(f"Answer these questions before approving: {listed}")
 
     plan = row.get("plan") or {}
     fields = plan.get("fields") or {}
@@ -556,6 +579,7 @@ def approve(
         """
         UPDATE agent_applications
         SET status = 'approved',
+            attention = %s,
             approved_snapshot = %s,
             approved_at = now(),
             error = NULL,
@@ -564,7 +588,7 @@ def approve(
             updated_at = now()
         WHERE id = %s AND user_id = %s AND status = 'pending_approval'
         """,
-        (Jsonb(snapshot), application_id, user_id),
+        (Jsonb(attention), Jsonb(snapshot), application_id, user_id),
     )
     if cur.rowcount == 0:
         raise InvalidState("The application changed while approving.")

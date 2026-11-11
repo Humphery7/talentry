@@ -203,3 +203,43 @@ def test_submit_settle_never_fills_new_fields() -> None:
     assert todo == [unexpected]
     assert value.tools.calls == []
     assert value.fields == {}
+
+
+def test_site_reformatted_value_is_kept() -> None:
+    value = agent()
+    location = field("loc", "Current location")
+    entry = value.entry(location, "Lagos, Nigeria", "user", "user")
+    value.fields[location.key] = entry
+
+    changed = field("loc", "Current location", value="Lagos, Lagos, Nigeria")
+
+    assert value.adopt_site_value(changed, entry) is True
+    assert entry.value == "Lagos, Lagos, Nigeria"
+    assert value.warnings
+
+
+def test_different_value_is_not_adopted() -> None:
+    value = agent()
+    location = field("loc", "Current location")
+    entry = value.entry(location, "Lagos, Nigeria", "user", "user")
+    value.fields[location.key] = entry
+
+    changed = field("loc", "Current location", value="Abuja, Nigeria")
+
+    assert value.adopt_site_value(changed, entry) is False
+    assert entry.value == "Lagos, Nigeria"
+    assert value.warnings == []
+
+
+def test_manual_notes_do_not_block_approval() -> None:
+    from services.agent_applications.store import open_questions
+
+    attention = [
+        {"kind": "manual", "answer": None},
+        {"kind": "question", "answer": "Lagos"},
+    ]
+
+    assert open_questions(attention) == []
+    assert open_questions([{"kind": "question", "answer": None}]) == [
+        {"kind": "question", "answer": None}
+    ]
