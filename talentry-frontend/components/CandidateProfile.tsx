@@ -9,6 +9,10 @@ export interface CandidateProfile {
   currentTitle: string | null
   yearsExperience: number | null
   location: string | null
+  phone: string | null
+  linkedinUrl: string | null
+  githubUrl: string | null
+  websiteUrl: string | null
   summary: string | null
   cvFilename?: string | null
   cvUpdatedAt?: string | null
@@ -19,10 +23,24 @@ type Draft = {
   currentTitle: string
   yearsExperience: string
   location: string
+  phone: string
+  linkedinUrl: string
+  githubUrl: string
+  websiteUrl: string
   summary: string
 }
 
-const EMPTY: Draft = { headline: '', currentTitle: '', yearsExperience: '', location: '', summary: '' }
+const EMPTY: Draft = {
+  headline: '',
+  currentTitle: '',
+  yearsExperience: '',
+  location: '',
+  phone: '',
+  linkedinUrl: '',
+  githubUrl: '',
+  websiteUrl: '',
+  summary: '',
+}
 
 function toDraft(profile?: CandidateProfile | null): Draft {
   if (!profile) return EMPTY
@@ -31,6 +49,10 @@ function toDraft(profile?: CandidateProfile | null): Draft {
     currentTitle: profile.currentTitle ?? '',
     yearsExperience: profile.yearsExperience === null ? '' : String(profile.yearsExperience),
     location: profile.location ?? '',
+    phone: profile.phone ?? '',
+    linkedinUrl: profile.linkedinUrl ?? '',
+    githubUrl: profile.githubUrl ?? '',
+    websiteUrl: profile.websiteUrl ?? '',
     summary: profile.summary ?? '',
   }
 }
@@ -144,9 +166,29 @@ function ProfileForm({
         <label htmlFor={`${id}-headline`}>Headline</label>
         <input id={`${id}-headline`} className="f" value={draft.headline} onChange={field('headline')} placeholder="e.g. Frontend engineer focused on accessible products" />
       </div>
+      <div className="prow">
+        <div>
+          <label htmlFor={`${id}-location`}>Location</label>
+          <input id={`${id}-location`} className="f" value={draft.location} onChange={field('location')} placeholder="e.g. Lagos, Nigeria (open to remote)" />
+        </div>
+        <div>
+          <label htmlFor={`${id}-phone`}>Phone</label>
+          <input id={`${id}-phone`} className="f" type="tel" value={draft.phone} onChange={field('phone')} placeholder="e.g. +234 801 234 5678" />
+        </div>
+      </div>
+      <div className="prow">
+        <div>
+          <label htmlFor={`${id}-linkedin`}>LinkedIn</label>
+          <input id={`${id}-linkedin`} className="f" inputMode="url" value={draft.linkedinUrl} onChange={field('linkedinUrl')} placeholder="linkedin.com/in/you" />
+        </div>
+        <div>
+          <label htmlFor={`${id}-github`}>GitHub</label>
+          <input id={`${id}-github`} className="f" inputMode="url" value={draft.githubUrl} onChange={field('githubUrl')} placeholder="github.com/you" />
+        </div>
+      </div>
       <div>
-        <label htmlFor={`${id}-location`}>Location</label>
-        <input id={`${id}-location`} className="f" value={draft.location} onChange={field('location')} placeholder="e.g. Lagos, Nigeria (open to remote)" />
+        <label htmlFor={`${id}-website`}>Website or portfolio</label>
+        <input id={`${id}-website`} className="f" inputMode="url" value={draft.websiteUrl} onChange={field('websiteUrl')} placeholder="yoursite.com" />
       </div>
       <div>
         <label htmlFor={`${id}-summary`}>Summary</label>

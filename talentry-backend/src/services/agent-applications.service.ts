@@ -12,6 +12,7 @@ export interface AgentApplicationBatch {
   batchId: string;
   count: number;
   jobs: AgentApplicationItem[];
+  skipped: number[];
 }
 
 interface CareerAttention {
@@ -237,6 +238,10 @@ export async function queueTop(
        AND j.status = 'open'
        AND NOT EXISTS (
          SELECT 1 FROM agent_applications a
+         WHERE a.user_id = r.user_id AND a.job_id = r.job_id
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM applications a
          WHERE a.user_id = r.user_id AND a.job_id = r.job_id
        )
      ORDER BY r.rank

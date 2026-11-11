@@ -79,7 +79,7 @@ def _state_error(exc: store.InvalidState) -> HTTPException:
 @router.post("", response_model=StartResult, status_code=202)
 def start(body: StartRequest, conn: ConnectionDep) -> StartResult:
     try:
-        batch_id, jobs = enqueue(
+        batch_id, jobs, skipped = enqueue(
             conn,
             user_id=body.user_id,
             job_ids=body.job_ids,
@@ -91,6 +91,7 @@ def start(body: StartRequest, conn: ConnectionDep) -> StartResult:
         batchId=batch_id,
         count=len(jobs),
         jobs=[AgentApplicationItem(**job) for job in jobs],
+        skipped=skipped,
     )
 
 

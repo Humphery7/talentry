@@ -32,6 +32,13 @@ class FakeCursor:
                 for job_id in self.conn.open_job_ids
                 if job_id in wanted
             ]
+        elif "UNION" in sql:
+            wanted = set(params[1])
+            self.rows = [
+                {"job_id": job_id}
+                for job_id in self.conn.applied_job_ids
+                if job_id in wanted
+            ]
 
     def fetchall(self):
         return self.rows
@@ -41,8 +48,9 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self, open_job_ids):
+    def __init__(self, open_job_ids, applied_job_ids=()):
         self.open_job_ids = set(open_job_ids)
+        self.applied_job_ids = set(applied_job_ids)
         self.inserted: list[tuple] = []
 
     def cursor(self, row_factory=None):
@@ -56,9 +64,10 @@ def test_enqueue_dedupes_and_queues_open_jobs() -> None:
     user_id = uuid4()
     conn = FakeConn({7, 9})
 
-    batch_id, jobs = enqueue(conn, user_id=user_id, job_ids=[9, 7, 9])
+    batch_id, jobs, skipped = enqueue(conn, user_id=user_id, job_ids=[9, 7, 9])
 
     assert [job["jobId"] for job in jobs] == [9, 7]
+    assert skipped == []
     assert all(job["status"] == "queued" for job in jobs)
     assert len(conn.inserted) == 2
     assert {row[0] for row in conn.inserted} == {batch_id}
@@ -80,6 +89,16 @@ def test_enqueue_rejects_missing_or_closed_jobs() -> None:
 
     assert exc.value.job_ids == [8]
     assert conn.inserted == []
+
+
+def test_enqueue_skips_jobs_that_already_have_an_application() -> None:
+    conn = FakeConn({7, 9}, applied_job_ids={9})
+
+    _, jobs, skipped = enqueue(conn, user_id=uuid4(), job_ids=[7, 9])
+
+    assert [job["jobId"] for job in jobs] == [7]
+    assert skipped == [9]
+    assert [row[2] for row in conn.inserted] == [7]
 
 
 def test_start_request_requires_valid_job_ids() -> None:

@@ -94,6 +94,7 @@ export interface Batch {
   batchId: string
   count: number
   jobs: { jobId: number; status: string }[]
+  skipped: number[]
 }
 
 export const STATUS_TEXT: Record<Status, [string, string]> = {

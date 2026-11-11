@@ -206,16 +206,28 @@ export function CareerCoach() {
     setAgentNotice('')
     try {
       const result = await applyWithAgent(jobIds)
+      const skipped = result.skipped ?? []
       setQueued(
         current =>
-          new Set([...current, ...result.jobs.map(job => job.jobId)]),
+          new Set([
+            ...current,
+            ...result.jobs.map(job => job.jobId),
+            ...skipped,
+          ]),
       )
       setSelected(new Set())
-      setAgentNotice(
-        `Queued ${result.count} ${
-          result.count === 1 ? 'job' : 'jobs'
-        } for Talentry's auto-apply agent.`,
-      )
+      if (result.count === 0 && skipped.length) {
+        setAgentNotice('Those jobs already have applications.')
+      } else {
+        setAgentNotice(
+          `Queued ${result.count} ${
+            result.count === 1 ? 'job' : 'jobs'
+          } for Talentry's auto-apply agent.` +
+            (skipped.length
+              ? ` ${skipped.length} already had applications and were skipped.`
+              : ''),
+        )
+      }
     } catch (err) {
       setAgentError(message(err))
     } finally {

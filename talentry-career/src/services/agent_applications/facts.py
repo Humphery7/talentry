@@ -153,6 +153,10 @@ def build_facts(
         ("location", "location"),
         ("current_title", "current_title"),
         ("headline", "headline"),
+        ("phone", "phone"),
+        ("linkedin_url", "linkedin_url"),
+        ("github_url", "github_url"),
+        ("website_url", "website_url"),
     ):
         value = (profile.get(source) or "").strip()
         if value:
@@ -163,7 +167,9 @@ def build_facts(
     for key in FACT_KEYS:
         saved = bank.get(f"fact:{key}")
         if saved and (saved.get("answer") or "").strip():
-            facts[key] = saved["answer"].strip()
+            # The profile is editable and therefore wins; the bank only fills
+            # facts the profile does not cover.
+            facts.setdefault(key, saved["answer"].strip())
     return facts
 
 

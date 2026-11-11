@@ -111,6 +111,10 @@ describe('parseCandidateProfile', () => {
       currentTitle: 'Frontend Developer',
       yearsExperience: 3,
       location: null,
+      phone: null,
+      linkedinUrl: null,
+      githubUrl: null,
+      websiteUrl: null,
       summary: null,
     });
   });
@@ -119,6 +123,17 @@ describe('parseCandidateProfile', () => {
     expect(() =>
       parseCandidateProfile({ yearsExperience: 200, headline: 'x'.repeat(161) }),
     ).toThrow(HttpError);
+  });
+
+  it('adds a scheme to profile links', () => {
+    const parsed = parseCandidateProfile({
+      linkedinUrl: 'linkedin.com/in/you',
+      githubUrl: 'https://github.com/you',
+      websiteUrl: ' ',
+    });
+    expect(parsed.linkedinUrl).toBe('https://linkedin.com/in/you');
+    expect(parsed.githubUrl).toBe('https://github.com/you');
+    expect(parsed.websiteUrl).toBeNull();
   });
 });
 

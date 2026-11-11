@@ -39,6 +39,7 @@ class StartResult(BaseModel):
     batchId: UUID
     count: int
     jobs: list[AgentApplicationItem]
+    skipped: list[int] = Field(default_factory=list)
 
 
 class AttentionItem(BaseModel):

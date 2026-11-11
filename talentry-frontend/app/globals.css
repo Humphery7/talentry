@@ -101,7 +101,7 @@ select.f{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='
 .usermenu-item{display:block;width:100%;text-align:left;padding:10px 12px;border-radius:10px;font-size:14px;text-decoration:none;transition:background-color .2s}
 .usermenu-item:hover{background:var(--field)}
 /* candidate profile */
-.profile-dlg{width:min(720px,calc(100vw - 24px))}
+.profile-dlg{width:min(720px,calc(100vw - 24px));max-height:90vh;overflow:auto}
 .pform{display:grid;gap:18px;max-width:720px}
 .prow{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 .pform label{font-weight:500;margin-bottom:8px}

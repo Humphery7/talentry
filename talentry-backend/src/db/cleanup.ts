@@ -10,9 +10,11 @@ const CLOSED_DELETE_DAYS = 7; // closed jobs are removed after a short grace
 const CLOSED_HEAVY_DAYS = 7; // ...and keep only a slim row if referenced
 const STALE_OPEN_DAYS = 90; // open jobs the crawler has not seen in 90 days
 const CRAWLER_ALIVE_DAYS = 7; // only prune stale open jobs while crawling works
+const CANCELLED_DELETE_HOURS = 24; // cancelled applications
+const SUBMITTED_RETAIN_DAYS = 30; // keep submitted docs/details this long, then only the reference
 const NOTIFICATION_DAYS = 60; // delete read notifications
-const EVENT_DAYS = 90; // delete events for finished applications
-const SCREENSHOT_DAYS = 90; // drop screenshots/browser state for finished apps
+const EVENT_DAYS = 90; // delete events for other finished applications
+const SCREENSHOT_DAYS = 90; // drop screenshots/browser state for other finished apps
 
 const RUN_EVERY_MS = 24 * 60 * 60 * 1000;
 const FIRST_RUN_MS = 2 * 60 * 1000;
@@ -20,6 +22,9 @@ const FIRST_RUN_MS = 2 * 60 * 1000;
 interface Counts {
   jobsSlimmed: number;
   jobsDeleted: number;
+  applicationsDeleted: number;
+  documentsDeleted: number;
+  applicationsCleared: number;
   notificationsDeleted: number;
   eventsDeleted: number;
   applicationsShrunk: number;
@@ -33,10 +38,98 @@ export async function runCleanup(): Promise<Counts> {
   const counts: Counts = {
     jobsSlimmed: 0,
     jobsDeleted: 0,
+    applicationsDeleted: 0,
+    documentsDeleted: 0,
+    applicationsCleared: 0,
     notificationsDeleted: 0,
     eventsDeleted: 0,
     applicationsShrunk: 0,
   };
+
+  // A cancelled application is only useful as a short-lived receipt. Removing
+  // it also stops it from pinning a job that would otherwise be cleaned up.
+  await step('agent applications: delete cancelled', counts, async () => {
+    const { rowCount } = await pool.query(
+      `DELETE FROM agent_applications
+       WHERE status = 'cancelled'
+         AND updated_at < now() - make_interval(hours => $1)`,
+      [CANCELLED_DELETE_HOURS],
+    );
+    counts.applicationsDeleted = rowCount ?? 0;
+  });
+
+  // A submitted application is kept as a permanent "already applied" record,
+  // but the generated CV/cover letter and the filled-in form details are only
+  // useful for a short review window. After that the row keeps the reference
+  // (user, job, status, submitted date) and nothing else.
+  await step('agent documents: delete old submitted files', counts, async () => {
+    const { rowCount } = await pool.query(
+      `DELETE FROM agent_application_documents d
+       USING agent_applications a
+       WHERE d.agent_application_id = a.id
+         AND a.status = 'submitted'
+         AND COALESCE(a.completed_at, a.submitted_at, a.updated_at)
+             < now() - make_interval(days => $1)`,
+      [SUBMITTED_RETAIN_DAYS],
+    );
+    counts.documentsDeleted = rowCount ?? 0;
+  });
+
+  await step('agent applications: keep only the submitted reference', counts, async () => {
+    const { rowCount } = await pool.query(
+      `UPDATE agent_applications
+       SET plan = '{}'::jsonb,
+           attention = '[]'::jsonb,
+           warnings = '[]'::jsonb,
+           options = '{}'::jsonb,
+           approved_snapshot = NULL,
+           browser_state = NULL,
+           screenshot = NULL,
+           result = NULL,
+           error = NULL
+       WHERE status = 'submitted'
+         AND COALESCE(completed_at, submitted_at, updated_at)
+             < now() - make_interval(days => $1)
+         AND (
+           plan <> '{}'::jsonb
+           OR attention <> '[]'::jsonb
+           OR warnings <> '[]'::jsonb
+           OR options <> '{}'::jsonb
+           OR approved_snapshot IS NOT NULL
+           OR browser_state IS NOT NULL
+           OR screenshot IS NOT NULL
+           OR result IS NOT NULL
+           OR error IS NOT NULL
+         )`,
+      [SUBMITTED_RETAIN_DAYS],
+    );
+    counts.applicationsCleared = rowCount ?? 0;
+  });
+
+  await step('agent events: delete old submitted history', counts, async () => {
+    const { rowCount } = await pool.query(
+      `DELETE FROM agent_application_events e
+       USING agent_applications a
+       WHERE e.agent_application_id = a.id
+         AND a.status = 'submitted'
+         AND e.created_at < now() - make_interval(days => $1)`,
+      [SUBMITTED_RETAIN_DAYS],
+    );
+    counts.eventsDeleted += rowCount ?? 0;
+  });
+
+  await step('notifications: delete old submitted items', counts, async () => {
+    const { rowCount } = await pool.query(
+      `DELETE FROM notifications n
+       USING agent_applications a
+       WHERE n.agent_application_id = a.id
+         AND a.status = 'submitted'
+         AND COALESCE(a.completed_at, a.submitted_at, a.updated_at)
+             < now() - make_interval(days => $1)`,
+      [SUBMITTED_RETAIN_DAYS],
+    );
+    counts.notificationsDeleted += rowCount ?? 0;
+  });
 
   // Only prune "open" jobs when the crawler is still working. Otherwise a long
   // crawler outage would make every job look stale and wipe the board.
@@ -135,6 +228,9 @@ export async function runCleanup(): Promise<Counts> {
   const changed =
     counts.jobsSlimmed +
       counts.jobsDeleted +
+      counts.applicationsDeleted +
+      counts.documentsDeleted +
+      counts.applicationsCleared +
       counts.notificationsDeleted +
       counts.eventsDeleted +
       counts.applicationsShrunk >
@@ -149,7 +245,7 @@ export async function runCleanup(): Promise<Counts> {
   if (changed) {
     try {
       await pool.query(
-        'VACUUM (ANALYZE) jobs, notifications, agent_applications, agent_application_events',
+        'VACUUM (ANALYZE) jobs, notifications, agent_applications, agent_application_documents, agent_application_events',
       );
     } catch (err) {
       console.error('DB cleanup: vacuum failed:', err);

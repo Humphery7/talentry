@@ -30,6 +30,10 @@ export async function runMigrations() {
       current_title TEXT,
       years_experience INTEGER,
       location TEXT,
+      phone TEXT,
+      linkedin_url TEXT,
+      github_url TEXT,
+      website_url TEXT,
       summary TEXT,
       cv_filename TEXT,
       cv_mime TEXT,
@@ -42,6 +46,10 @@ export async function runMigrations() {
   `);
   // For databases that already have the table from an earlier run.
   await pool.query(`
+    ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS phone TEXT;
+    ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS linkedin_url TEXT;
+    ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS github_url TEXT;
+    ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS website_url TEXT;
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_filename TEXT;
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_mime TEXT;
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_data TEXT;
@@ -226,4 +234,20 @@ export async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_notifications_user
       ON notifications (user_id, created_at DESC);
   `);
+
+  // One agent application per user and job. Retrying or cancelling updates the
+  // existing row instead of creating another one.
+  try {
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_applications_user_job
+        ON agent_applications (user_id, job_id);
+    `);
+  } catch (err) {
+    // An existing database with duplicate rows cannot get the index until they
+    // are cleaned up. The enqueue check still prevents new duplicates.
+    if ((err as { code?: string }).code !== '23505') throw err;
+    console.warn(
+      'Could not add agent_applications unique index: duplicate rows exist.',
+    );
+  }
 }

@@ -4,7 +4,9 @@ import { postCareer } from './career.service.js';
 
 const COLUMNS = `
   user_id AS "userId", headline, current_title AS "currentTitle",
-  years_experience AS "yearsExperience", location, summary,
+  years_experience AS "yearsExperience", location, phone,
+  linkedin_url AS "linkedinUrl", github_url AS "githubUrl",
+  website_url AS "websiteUrl", summary,
   cv_filename AS "cvFilename", cv_updated_at AS "cvUpdatedAt",
   updated_at AS "updatedAt"
 `;
@@ -20,13 +22,18 @@ export async function get(userId: string) {
 export async function save(userId: string, input: CandidateProfileInput) {
   const { rows } = await pool.query(
     `INSERT INTO candidate_profiles
-       (user_id, headline, current_title, years_experience, location, summary)
-     VALUES ($1, $2, $3, $4, $5, $6)
+       (user_id, headline, current_title, years_experience, location, phone,
+        linkedin_url, github_url, website_url, summary)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT (user_id) DO UPDATE SET
        headline = EXCLUDED.headline,
        current_title = EXCLUDED.current_title,
        years_experience = EXCLUDED.years_experience,
        location = EXCLUDED.location,
+       phone = EXCLUDED.phone,
+       linkedin_url = EXCLUDED.linkedin_url,
+       github_url = EXCLUDED.github_url,
+       website_url = EXCLUDED.website_url,
        summary = EXCLUDED.summary,
        updated_at = now()
      RETURNING ${COLUMNS}`,
@@ -36,6 +43,10 @@ export async function save(userId: string, input: CandidateProfileInput) {
       input.currentTitle,
       input.yearsExperience,
       input.location,
+      input.phone,
+      input.linkedinUrl,
+      input.githubUrl,
+      input.websiteUrl,
       input.summary,
     ],
   );

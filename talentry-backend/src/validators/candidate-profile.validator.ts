@@ -5,6 +5,10 @@ export interface CandidateProfileInput {
   currentTitle: string | null;
   yearsExperience: number | null;
   location: string | null;
+  phone: string | null;
+  linkedinUrl: string | null;
+  githubUrl: string | null;
+  websiteUrl: string | null;
   summary: string | null;
 }
 
@@ -21,6 +25,13 @@ export function parseCandidateProfile(
       errors.push(`${field} must be shorter than or equal to ${max} characters`);
     }
     return trimmed || null;
+  }
+
+  // Links are stored with a scheme so the agent can type them into forms.
+  function url(field: string): string | null {
+    const value = text(field, 300);
+    if (!value) return null;
+    return /^https?:\/\//i.test(value) ? value : `https://${value}`;
   }
 
   let yearsExperience: number | null = null;
@@ -44,6 +55,10 @@ export function parseCandidateProfile(
     currentTitle: text('currentTitle', 120),
     yearsExperience,
     location: text('location', 120),
+    phone: text('phone', 40),
+    linkedinUrl: url('linkedinUrl'),
+    githubUrl: url('githubUrl'),
+    websiteUrl: url('websiteUrl'),
     summary: text('summary', 2000),
   };
 }

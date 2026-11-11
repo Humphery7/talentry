@@ -27,6 +27,10 @@ describe('candidate profile service', () => {
       currentTitle: null,
       yearsExperience: 3,
       location: 'Remote',
+      phone: null,
+      linkedinUrl: null,
+      githubUrl: null,
+      websiteUrl: null,
       summary: null,
     });
 
