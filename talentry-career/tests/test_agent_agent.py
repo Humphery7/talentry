@@ -10,7 +10,7 @@ from schemas.agent import (
 )
 from schemas.agent_applications import AttentionItem
 from schemas.browser import ActionResult
-from services.agent_applications.agent import Agent
+from services.agent_applications.agent import Agent, FormChanged
 from services.agent_applications import facts
 
 
@@ -327,3 +327,76 @@ def test_a_new_style_saved_answer_is_found_by_its_label() -> None:
     assert entry is not None
     assert entry.value == "Glovo"
     assert entry.status == "saved"
+
+
+class SubmitPage(FakeTools):
+    """A submit page that loads with empty fields.
+
+    Real sites render the form first, then the values arrive. Filling is what
+    puts them there, so a read taken before the fill sees nothing.
+    """
+
+    def __init__(self, *, keep_values: bool = True) -> None:
+        super().__init__()
+        self.keep_values = keep_values
+        self.values: dict[str, str] = {}
+
+    async def fill_field(self, element_id: str, value: str) -> ActionResult:
+        if self.keep_values:
+            self.values[element_id] = value
+        return await super().fill_field(element_id, value)
+
+
+def submit_page(tools: SubmitPage) -> FormObservation:
+    first = field("first-name", "First Name", required=True)
+    first.value = tools.values.get("first-name", "")
+    return FormObservation(
+        url="https://example.com/apply",
+        title="Apply",
+        text="",
+        fields=[first],
+    )
+
+
+def approved_name(value: Agent) -> None:
+    name = field("first-name", "First Name", required=True)
+    value.fields[name.key] = value.entry(
+        name, "Ufuoma-oghene", "user", "user"
+    )
+
+
+def test_submit_reads_the_page_back_after_filling() -> None:
+    value = agent()
+    tools = SubmitPage()
+    value.tools = tools
+    approved_name(value)
+
+    async def read() -> FormObservation:
+        return submit_page(tools)
+
+    value._read = read  # type: ignore[method-assign]
+
+    observation = asyncio.run(value._settle_and_verify())
+
+    # Filled once, and the value that was verified is the freshly read one.
+    assert tools.calls == [("fill", "first-name", "Ufuoma-oghene")]
+    assert observation.fields[0].value == "Ufuoma-oghene"
+
+
+def test_submit_still_stops_if_the_site_keeps_the_field_empty() -> None:
+    value = agent()
+    tools = SubmitPage(keep_values=False)
+    value.tools = tools
+    approved_name(value)
+
+    async def read() -> FormObservation:
+        return submit_page(tools)
+
+    value._read = read  # type: ignore[method-assign]
+
+    try:
+        asyncio.run(value._settle_and_verify())
+    except FormChanged as exc:
+        assert "First Name" in str(exc)
+    else:
+        raise AssertionError("a field the site never accepted must stop submit")

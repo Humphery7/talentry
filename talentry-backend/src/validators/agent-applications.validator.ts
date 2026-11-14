@@ -35,6 +35,15 @@ export function parseDocumentKind(raw: string): DocumentKind {
   return raw as DocumentKind;
 }
 
+export function parseDocumentVersion(raw: unknown): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const version = Number(raw);
+  if (!Number.isInteger(version) || version < 1) {
+    throw new HttpError(400, 'version must be a positive integer.');
+  }
+  return version;
+}
+
 export function parseAnswers(body: Input = {}): {
   answers: { id: string; answer: string }[];
 } {

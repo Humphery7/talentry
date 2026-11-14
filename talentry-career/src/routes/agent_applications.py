@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from db.connect import ConnectionDep
 from schemas.agent_applications import (
@@ -130,6 +130,40 @@ def get_application(
     conn: ConnectionDep,
 ) -> AgentApplicationDetail:
     return _detail(_get(conn, application_id, user_id))
+
+
+@router.get("/{application_id}/documents/{kind}/pdf")
+def get_document_pdf(
+    application_id: UUID,
+    kind: str,
+    user_id: UUID,
+    conn: ConnectionDep,
+    version: int | None = None,
+) -> Response:
+    """The exact PDF that was uploaded to the employer, when there is one.
+
+    A CV tailored from the candidate's own DOCX is rendered once at generation
+    time. Re-rendering its plain text in the browser loses the layout, so the
+    stored file is served instead. Documents without one (cover letters,
+    hand-edited versions) fall back to the printable text in the UI.
+    """
+    if kind not in {"cv", "cover_letter"}:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    found = store.document_pdf(conn, application_id, user_id, kind, version)
+    if found is None:
+        raise HTTPException(
+            status_code=404, detail="This document has no stored PDF."
+        )
+    number, data = found
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{kind}-v{number}.pdf"'
+            )
+        },
+    )
 
 
 @router.post(

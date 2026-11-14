@@ -133,3 +133,30 @@ def test_missing_setup_only_requires_the_cv():
         UUID(int=1),
     ) == []
     assert store.missing_setup(FakeConn(None), UUID(int=1)) == ["your CV"]
+
+
+def test_document_pdf_returns_the_stored_file():
+    conn = FakeConn({"version": 2, "pdf": memoryview(b"%PDF-1.7 cv")})
+
+    assert store.document_pdf(
+        conn, UUID(int=1), UUID(int=2), "cv", 2
+    ) == (2, b"%PDF-1.7 cv")
+
+
+def test_document_pdf_is_none_when_no_file_is_stored():
+    # Cover letters and hand-edited versions have text but no generated PDF.
+    assert (
+        store.document_pdf(
+            FakeConn({"version": 3, "pdf": None}),
+            UUID(int=1),
+            UUID(int=2),
+            "cover_letter",
+        )
+        is None
+    )
+    assert (
+        store.document_pdf(
+            FakeConn(None), UUID(int=1), UUID(int=2), "cv"
+        )
+        is None
+    )

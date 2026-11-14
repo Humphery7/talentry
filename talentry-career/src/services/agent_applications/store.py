@@ -343,6 +343,42 @@ def doc_version(
         return cur.fetchone()
 
 
+def document_pdf(
+    conn: psycopg.Connection,
+    application_id: str | UUID,
+    user_id: str | UUID,
+    kind: str,
+    version: int | None = None,
+) -> tuple[int, bytes] | None:
+    """The stored PDF for one document version, if it has one.
+
+    A CV tailored from the candidate's own DOCX is converted to PDF only once,
+    when it is generated. That exact file is what the employer receives, so it
+    is also what the candidate should download. Markdown-built documents and
+    user-edited versions have no stored PDF.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT d.version, d.pdf
+            FROM agent_application_documents d
+            JOIN agent_applications a ON a.id = d.agent_application_id
+            WHERE d.agent_application_id = %s
+              AND a.user_id = %s
+              AND d.kind = %s
+              AND (%s::int IS NULL OR d.version = %s)
+              AND d.pdf IS NOT NULL
+            ORDER BY d.version DESC
+            LIMIT 1
+            """,
+            (application_id, user_id, kind, version, version),
+        )
+        row = cur.fetchone()
+    if row is None or not row.get("pdf"):
+        return None
+    return int(row["version"]), bytes(row["pdf"])
+
+
 def add_doc(
     conn: psycopg.Connection,
     application_id: str | UUID,

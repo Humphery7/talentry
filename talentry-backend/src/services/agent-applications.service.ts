@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import { HttpError } from '../utils/http-error.js';
-import { getCareer, postCareer } from './career.service.js';
+import { getCareer, getCareerFile, postCareer } from './career.service.js';
 
 export interface AgentApplicationItem {
   jobId: number;
@@ -488,6 +488,18 @@ export function editField(
     await event(db, id, 'edited', `Edited “${field.label}”.`);
     return { ok: true };
   });
+}
+
+export function documentPdf(
+  userId: string,
+  id: string,
+  kind: 'cv' | 'cover_letter',
+  version?: number,
+): Promise<{ body: Buffer; contentType: string }> {
+  const query = version === undefined ? '' : `?version=${version}`;
+  return getCareerFile(
+    careerPath(`/agent-applications/${id}/documents/${kind}/pdf${query}`, userId),
+  );
 }
 
 export function saveDocument(

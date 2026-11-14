@@ -1282,6 +1282,63 @@ class Agent:
         )
         return status
 
+    async def _read(self) -> FormObservation:
+        """Inspect the page and turn it into a form description."""
+        inspection = await self.tools.inspect_page()
+        observation = build_observation(inspection)
+        self.check_blockers(observation)
+        return observation
+
+    def _require_approved(self, todo: list[FormField]) -> None:
+        """Stop if the site now needs something that was never approved."""
+        missing = [field.label for field in todo if field.required]
+        if missing:
+            raise FormChanged(
+                "The site now requires: "
+                + ", ".join(f"“{name}”" for name in missing[:5])
+                + "."
+            )
+
+    def _verify_approved(self, observation: FormObservation) -> None:
+        """Stop only if a field still differs after we refilled it."""
+        for field in observation.fields:
+            entry = self.fields.get(field.key)
+            if not (entry and entry.status in DONE_STATUSES):
+                continue
+            if self.matches(field, entry):
+                continue
+            if self.adopt_site_value(field, entry):
+                continue
+            raise FormChanged(
+                f"“{field.label}” changed before submission: "
+                f"I filled {_value_text(entry.value, field.sensitive)}, "
+                "but the site now shows "
+                f"{_value_text(field.value, field.sensitive)}."
+            )
+
+    async def _settle_and_verify(self) -> FormObservation:
+        """Fill the approved answers, then read the page back.
+
+        Filling is itself a change to the page. The old code compared the
+        values from *before* it filled them, so a submit page that loads empty
+        always looked like the site had wiped the answers.
+        """
+        observation = await self._read()
+        self._require_approved(
+            await self.settle(observation, only_approved=True)
+        )
+
+        observation = await self._read()
+        pending = await self.settle(observation, only_approved=True)
+        # The second pass may have filled fields after this observation was
+        # taken, so never compare against it: read the page back first.
+        observation = await self._read()
+        if pending:
+            # A second pass means the first fill did not stick.
+            self._require_approved(pending)
+        self._verify_approved(observation)
+        return observation
+
     async def submit(self, url: str) -> str:
         snapshot = self.app.get("approved_snapshot") or {}
         if not snapshot:
@@ -1327,53 +1384,15 @@ class Agent:
         if not result.ok:
             raise ActionError(result.message)
 
+        observation = await self._settle_and_verify()
         for _ in range(3):
-            inspection = await self.tools.inspect_page()
-            observation = build_observation(inspection)
-            self.check_blockers(observation)
-            todo = await self.settle(observation, only_approved=True)
-            missing = [field.label for field in todo if field.required]
-            if missing:
-                raise FormChanged(
-                    "The site now requires: "
-                    + ", ".join(f"“{name}”" for name in missing[:5])
-                    + "."
-                )
             next_button = self._next(observation)
             if not next_button:
                 break
             result = await self.tools.click_element(next_button.element_id)
             if not result.ok:
                 raise ActionError(result.message)
-
-        inspection = await self.tools.inspect_page()
-        observation = build_observation(inspection)
-        self.check_blockers(observation)
-        todo = await self.settle(observation, only_approved=True)
-        missing = [field.label for field in todo if field.required]
-        if missing:
-            raise FormChanged(
-                "The site now requires: "
-                + ", ".join(f"“{name}”" for name in missing[:5])
-                + "."
-            )
-
-        for field in observation.fields:
-            entry = self.fields.get(field.key)
-            if not (
-                entry
-                and entry.status in DONE_STATUSES
-                and not self.matches(field, entry)
-            ):
-                continue
-            if self.adopt_site_value(field, entry):
-                continue
-            raise FormChanged(
-                f"“{field.label}” changed before submission: "
-                f"I filled {_value_text(entry.value, field.sensitive)}, "
-                "but the site now shows "
-                f"{_value_text(field.value, field.sensitive)}."
-            )
+            observation = await self._settle_and_verify()
 
         if observation.signals.captcha:
             raise NeedsManual(

@@ -39,6 +39,43 @@ export function getCareer<T>(path: string): Promise<T> {
   return request<T>(path, { method: 'GET' });
 }
 
+/** Fetch a binary file (a stored PDF) from talentry-career. */
+export async function getCareerFile(
+  path: string,
+): Promise<{ body: Buffer; contentType: string }> {
+  let response: Response;
+  try {
+    response = await fetch(`${env.careerUrl}${path}`, {
+      signal: AbortSignal.timeout(CAREER_TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.error('Career service request failed:', err);
+    const timedOut = err instanceof Error && err.name === 'TimeoutError';
+    throw new HttpError(
+      timedOut ? 504 : 502,
+      timedOut ? 'Career service timed out.' : 'Career service is unavailable.',
+    );
+  }
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as {
+      detail?: unknown;
+    } | null;
+    const detail = data?.detail;
+    const message =
+      typeof detail === 'string' ? detail : 'Career service error.';
+    throw new HttpError(
+      response.status >= 500 ? 502 : response.status,
+      message,
+    );
+  }
+
+  return {
+    body: Buffer.from(await response.arrayBuffer()),
+    contentType: response.headers.get('content-type') ?? 'application/pdf',
+  };
+}
+
 export function postCareer<T>(path: string, payload: unknown): Promise<T> {
   return request<T>(path, {
     method: 'POST',

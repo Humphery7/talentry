@@ -153,6 +153,26 @@ export function call<T>(path: string, method = 'GET', body?: unknown): Promise<T
   return request<T>(`/api/agent-applications${path}`, method, body)
 }
 
+/**
+ * The PDF a document was generated as, when one exists.
+ *
+ * A CV tailored from the candidate's own DOCX is rendered once, at generation
+ * time, and that file is what the employer receives. Returning null means the
+ * caller should fall back to printing the text.
+ */
+export async function documentPdf(
+  id: string,
+  kind: string,
+  version: number,
+): Promise<Blob | null> {
+  const r = await fetch(
+    `/api/agent-applications/${id}/documents/${kind}/pdf?version=${version}`,
+    { headers: authHeaders(), cache: 'no-store' },
+  )
+  if (!r.ok) return null
+  return r.blob()
+}
+
 export function applyWithAgent(jobIds: number[]) {
   return call<Batch>('', 'POST', { jobIds })
 }

@@ -8,6 +8,7 @@ vi.mock('../../src/db/pool.js', () => ({
 
 import {
   answer,
+  documentPdf,
   get,
   list,
   start,
@@ -16,6 +17,7 @@ import {
   parseAnswers,
   parseApplicationId,
   parseDocument,
+  parseDocumentVersion,
   parseFieldEdit,
   parseQueueTop,
   parseRetry,
@@ -223,6 +225,38 @@ describe('agent applications service', () => {
       answers: { q1: 'Yes' },
     });
   });
+
+  it('fetches the stored PDF for the requested document version', async () => {
+    const pdf = Buffer.from('%PDF-1.7 formatted cv');
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(pdf, {
+        status: 200,
+        headers: { 'Content-Type': 'application/pdf' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const file = await documentPdf('user-1', 'app-1', 'cv', 2);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8100/agent-applications/app-1/documents/cv/pdf'
+        + '?version=2&user_id=user-1',
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+    expect(file.contentType).toBe('application/pdf');
+    expect(file.body.toString()).toBe('%PDF-1.7 formatted cv');
+  });
+
+  it('keeps the career error when a document has no stored PDF', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ detail: 'No PDF.' }, 404)),
+    );
+
+    await expect(
+      documentPdf('user-1', 'app-1', 'cover_letter'),
+    ).rejects.toMatchObject({ status: 404 });
+  });
 });
 
 describe('agent applications validators', () => {
@@ -253,5 +287,12 @@ describe('agent applications validators', () => {
     expect(parseRetry({ confirmNotSubmitted: true })).toEqual({
       confirmNotSubmitted: true,
     });
+  });
+
+  it('validates an optional document version', () => {
+    expect(parseDocumentVersion(undefined)).toBeUndefined();
+    expect(parseDocumentVersion('3')).toBe(3);
+    expect(() => parseDocumentVersion('0')).toThrow();
+    expect(() => parseDocumentVersion('latest')).toThrow();
   });
 });

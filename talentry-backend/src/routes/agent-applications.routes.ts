@@ -8,6 +8,7 @@ import {
   parseApplicationId,
   parseDocument,
   parseDocumentKind,
+  parseDocumentVersion,
   parseFieldEdit,
   parseQueueTop,
   parseRetry,
@@ -89,6 +90,26 @@ agentApplicationsRoutes.put(
         content,
       ),
     );
+  },
+);
+
+agentApplicationsRoutes.get(
+  '/:id/documents/:kind/pdf',
+  async (req: Request, res: Response) => {
+    const kind = parseDocumentKind(String(req.params.kind));
+    const version = parseDocumentVersion(req.query.version);
+    const file = await agentApplicationsService.documentPdf(
+      uid(req),
+      id(req),
+      kind,
+      version,
+    );
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${kind}-v${version ?? 'latest'}.pdf"`,
+    );
+    res.send(file.body);
   },
 );
 

@@ -24,10 +24,23 @@ async function forward(req: Request, { params }: Context) {
       cache: 'no-store',
     },
   )
+  const contentType = r.headers.get('content-type') ?? 'application/json'
+  const disposition = r.headers.get('content-disposition')
+  // A stored CV is a binary PDF. Reading it as text would corrupt it, so pass
+  // the bytes through untouched.
+  if (contentType.startsWith('application/pdf')) {
+    return new NextResponse(await r.arrayBuffer(), {
+      status: r.status,
+      headers: {
+        'Content-Type': contentType,
+        'Content-Disposition': disposition ?? 'attachment',
+      },
+    })
+  }
   const data = await r.text()
   return new NextResponse(data, {
     status: r.status,
-    headers: { 'Content-Type': r.headers.get('content-type') ?? 'application/json' },
+    headers: { 'Content-Type': contentType },
   })
 }
 

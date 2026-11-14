@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { loadSession } from '@/lib/auth'
-import { ApiError, call, STATUS_TEXT, WORKING, type Detail, type Field } from '@/lib/applications'
+import { ApiError, call, documentPdf, STATUS_TEXT, WORKING, type Detail, type Field } from '@/lib/applications'
 
 const SOURCE: Record<string, string> = {
   profile: 'From your profile',
@@ -181,6 +181,7 @@ export default function ApplicationDetail({ id }: { id: string }) {
               <DocEditor
                 key={`${kind}-${document.version}`}
                 kind={kind}
+                appId={data.id}
                 document={document}
                 title={`${data.jobTitle ?? 'Application'} — ${kind === 'cv' ? 'CV' : 'Cover letter'}`}
                 disabled={!editable || busy}
@@ -384,8 +385,9 @@ function FieldRow({ field, disabled, onSave }: { field: Field; disabled: boolean
   )
 }
 
-function DocEditor({ kind, document, title, disabled, onSave, onRegenerate }: {
+function DocEditor({ kind, appId, document, title, disabled, onSave, onRegenerate }: {
   kind: 'cv' | 'cover_letter'
+  appId: string
   document: NonNullable<Detail['documents']['cv']>
   title: string
   disabled: boolean
@@ -393,22 +395,53 @@ function DocEditor({ kind, document, title, disabled, onSave, onRegenerate }: {
   onRegenerate: () => void
 }) {
   const [text, setText] = useState(document.content)
+  const [downloading, setDownloading] = useState(false)
   const name = kind === 'cv' ? 'Tailored CV' : 'Cover letter'
+  const edited = text !== document.content
+
+  async function download() {
+    // Unsaved edits are not in the stored PDF, so print what is on screen.
+    if (edited) {
+      printDocument(text, title, kind === 'cover_letter')
+      return
+    }
+    setDownloading(true)
+    try {
+      const blob = await documentPdf(appId, kind, document.version)
+      if (blob) savePdf(blob, title)
+      else printDocument(text, title, kind === 'cover_letter')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   return (
     <div className="panel">
       <b>{name}</b> <span className="m">version {document.version} · {document.origin === 'original' ? 'your original CV' : document.origin.replace(/_/g, ' ')}</span>
       {document.notes.map(note => <p key={note} className="m" style={{ marginTop: 6 }}>{note}</p>)}
       <textarea className="f" style={{ height: 320, fontFamily: 'inherit' }} value={text} disabled={disabled} onChange={event => setText(event.target.value)} aria-label={`${name} text`} />
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <button className="chip" disabled={disabled || text === document.content || !text.trim()} onClick={() => onSave(text)}>Save as new version</button>
-        <button className="chip" disabled={!text.trim()} onClick={() => printDocument(text, title, kind === 'cover_letter')}>Download PDF</button>
+        <button className="chip" disabled={disabled || !edited || !text.trim()} onClick={() => onSave(text)}>Save as new version</button>
+        <button className="chip" disabled={!text.trim() || downloading} onClick={() => void download()}>Download PDF</button>
         <button className="chip" disabled={disabled} onClick={onRegenerate}>Regenerate</button>
       </div>
       <p className="m" style={{ marginTop: 10 }}>
-        Download opens your browser’s print dialog — choose “Save as PDF”. The approved version is the one that gets uploaded. Earlier versions are kept ({document.versions.length} so far).
+        {edited
+          ? 'You have unsaved edits, so Download opens the print dialog — choose “Save as PDF”. Save a new version to keep the layout.'
+          : `For a CV built from your uploaded DOCX, Download gives you the exact PDF that was sent to the employer. Other documents open the print dialog — choose “Save as PDF”. Earlier versions are kept (${document.versions.length} so far).`}
       </p>
     </div>
   )
+}
+
+function savePdf(blob: Blob, title: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  const safe = title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Document'
+  link.href = url
+  link.download = `${safe}.pdf`
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function escapeHtml(value: string) {
