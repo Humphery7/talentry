@@ -72,3 +72,52 @@ def test_original_cv_fallback_includes_contact_details() -> None:
     assert markdown.startswith("# Ada Example")
     assert "ada@example.com" in markdown
     assert "Senior Frontend Engineer" in markdown
+
+
+BLOB = (
+    "Dear Hiring Team, I am writing to express my interest in the Backend Engineer role. "
+    "I build backend services in Python and TypeScript. "
+    "In my last role I shipped FastAPI services to production. "
+    "I also built data pipelines with AWS S3. "
+    "My side projects include a voice journaling app. "
+    "I would welcome the chance to discuss the role. "
+    "Sincerely, Ada Example"
+)
+
+
+def test_single_blob_letter_becomes_spaced_paragraphs() -> None:
+    letter = documents.format_letter(BLOB, FACTS)
+    blocks = letter.strip().split("\n\n")
+    assert blocks[0] == "Dear Hiring Team,"
+    assert len(blocks) >= 4  # greeting, at least two paragraphs, sign-off
+    assert blocks[-1] == "Sincerely,\nAda Example"
+    assert "  " not in letter  # no run-on whitespace
+
+
+def test_letter_is_left_alone_when_already_formatted() -> None:
+    once = documents.format_letter(BLOB, FACTS)
+    assert documents.format_letter(once, FACTS) == once
+
+
+def test_letter_gets_a_greeting_and_sign_off_when_missing() -> None:
+    letter = documents.format_letter(
+        "I am interested in this role and have shipped Python services.", FACTS
+    )
+    assert letter.startswith("Dear Hiring Team,")
+    assert letter.rstrip().endswith("Ada Example")
+    assert "Sincerely," in letter
+
+
+def test_letter_html_has_spaced_paragraphs_and_joined_sign_off() -> None:
+    letter = documents.format_letter(BLOB, FACTS)
+    html = documents.to_html(letter, letter=True)
+    assert html.count("<p") >= 4
+    assert "<p class='signoff'>Sincerely,<br>Ada Example</p>" in html
+    assert "p{margin:0 0 11px}" in html
+    assert "<h1" not in html
+
+
+def test_cv_html_keeps_the_compact_style() -> None:
+    html = documents.to_html(documents.original_cv_markdown(CV, FACTS))
+    assert "<h1>Ada Example</h1>" in html
+    assert "p{margin:3px 0}" in html

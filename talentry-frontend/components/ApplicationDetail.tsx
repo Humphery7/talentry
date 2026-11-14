@@ -83,6 +83,36 @@ export default function ApplicationDetail({ id }: { id: string }) {
         {data.result?.manual && <p className="m" style={{ marginTop: 10 }}>You submitted this yourself.</p>}
       </div>
 
+      {data.status === 'failed' && (
+        <div className="panel" role="alert" style={{ marginTop: 16 }}>
+          <b>I couldn’t finish this application</b>
+          <p style={{ margin: '8px 0' }}>
+            {data.error ?? 'Something went wrong on the employer’s site.'}
+          </p>
+          <p className="m" style={{ margin: 0 }}>
+            Nothing you typed is lost. <b>Try again</b> picks up where I stopped, and you will
+            not be asked the same questions again.
+          </p>
+          <button className="btn" style={{ width: 'auto', padding: '0 24px', marginTop: 14 }} disabled={busy} onClick={() => void act('/retry')}>
+            Try again
+          </button>
+        </div>
+      )}
+
+      {data.status === 'pending_approval' && (
+        <div className="panel" role="status" style={{ marginTop: 16 }}>
+          <b>Ready for you to check</b>
+          <p className="m" style={{ margin: '6px 0 0' }}>
+            {filled.length} answer{filled.length === 1 ? '' : 's'} ·{' '}
+            {[data.documents.cv ? 'tailored CV' : '', coverLetter ? 'cover letter' : '']
+              .filter(Boolean)
+              .join(' and ') || 'no documents'}{' '}
+            attached. Nothing is sent until you click <b>Approve &amp; submit</b> at the
+            bottom of this page.
+          </p>
+        </div>
+      )}
+
       {questions.length > 0 && (
         <Questions
           items={questions}
@@ -97,8 +127,10 @@ export default function ApplicationDetail({ id }: { id: string }) {
           <p style={{ margin: '8px 0' }}>{item.question}</p>
           {item.why && <p className="m">{item.why}</p>}
           <p className="m" style={{ margin: '8px 0 16px' }}>
-            Talentry cannot complete this in its own browser. You can finish it on the employer’s site yourself, or retry once it is sorted.
-            {filled.length > 0 && ' Use “Copy my details” below so you do not have to retype everything.'}
+            Talentry cannot do this step in its own browser. Finish it on the employer’s site,
+            then click “I’ve sorted it, retry” — it picks up where it stopped and keeps every
+            answer you already gave.
+            {filled.length > 0 && ' Use “Copy my details” below so you do not retype anything.'}
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
             {employerUrl && <a className="btn" style={{ width: 'auto', padding: '0 24px', textDecoration: 'none' }} href={employerUrl} target="_blank" rel="noreferrer">Open employer’s page</a>}
@@ -108,8 +140,8 @@ export default function ApplicationDetail({ id }: { id: string }) {
         </div>
       ))}
 
-      {filled.length > 0 && ['needs_input', 'pending_approval', 'unconfirmed', 'failed'].includes(data.status) && (
-        <CopyDetails fields={filled} />
+      {['needs_input', 'pending_approval', 'unconfirmed', 'failed'].includes(data.status) && (
+        <CopyDetails data={data} fields={filled} />
       )}
 
       {data.warnings.length > 0 && (
@@ -214,12 +246,41 @@ export default function ApplicationDetail({ id }: { id: string }) {
   )
 }
 
-function CopyDetails({ fields }: { fields: Field[] }) {
+function CopyDetails({ data, fields }: { data: Detail; fields: Field[] }) {
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
-  const text = fields
+  const lines: string[] = []
+
+  const title = data.jobTitle
+    ? `Application: ${data.jobTitle}${data.company ? ` at ${data.company}` : ''}`
+    : 'Application details'
+  lines.push(title, '')
+
+  const candidate = data.candidate
+  const contact = [
+    candidate?.name && `Name: ${candidate.name}`,
+    candidate?.email && `Email: ${candidate.email}`,
+    candidate?.phone && `Phone: ${candidate.phone}`,
+    candidate?.location && `Location: ${candidate.location}`,
+    candidate?.linkedinUrl && `LinkedIn: ${candidate.linkedinUrl}`,
+    candidate?.githubUrl && `GitHub: ${candidate.githubUrl}`,
+    candidate?.websiteUrl && `Website: ${candidate.websiteUrl}`,
+  ].filter((line): line is string => Boolean(line))
+  if (contact.length) lines.push('My details', ...contact, '')
+
+  const answers = fields
     .filter(field => field.kind !== 'file' && field.value.trim())
     .map(field => `${field.label}: ${field.value}`)
-    .join('\n')
+  if (answers.length) lines.push('Answers Talentry filled in', ...answers, '')
+
+  const documents = [
+    data.documents.cv ? 'the tailored CV' : '',
+    data.documents.cover_letter ? 'the cover letter' : '',
+  ].filter(Boolean)
+  if (documents.length) {
+    lines.push(`Attach ${documents.join(' and ')} — use “Download PDF” on this page.`)
+  }
+
+  const text = lines.join('\n').trim()
 
   async function copy() {
     try {
@@ -234,7 +295,9 @@ function CopyDetails({ fields }: { fields: Field[] }) {
     <div className="panel" style={{ marginTop: 16 }}>
       <b>Applying yourself?</b>
       <p className="m" style={{ margin: '6px 0 12px' }}>
-        Copy the details Talentry filled, then paste them into the employer’s form. You only need this when a CAPTCHA or a login stops the agent.
+        Copies your name, email, phone and links, every answer Talentry filled in, and a note
+        on which documents to attach. You only need this when a CAPTCHA or a login stops the
+        agent.
       </p>
       <button className="chip" disabled={!text} onClick={() => void copy()}>Copy my details</button>
       {copied === 'done' && <span className="m" role="status" style={{ marginLeft: 10 }}>Copied.</span>}
@@ -244,7 +307,7 @@ function CopyDetails({ fields }: { fields: Field[] }) {
           readOnly
           value={text}
           aria-label="Details to copy"
-          style={{ height: 160, marginTop: 12 }}
+          style={{ height: 220, marginTop: 12 }}
         />
       )}
     </div>
@@ -258,7 +321,9 @@ function Questions({ items, busy, onSave }: { items: Detail['attention']; busy: 
     <div className="panel" style={{ marginTop: 16 }}>
       <b>Talentry needs your answers to continue</b>
       <p className="m" style={{ margin: '6px 0 16px' }}>
-        Talentry never guesses sensitive or personal answers. Your answers are saved so you are not asked the same thing twice.
+        Everything it could not answer is here, in one go. Personal details like your phone
+        and links are reused next time; answers that depend on the job — pay, notice period,
+        work authorization — are only used for this application.
       </p>
       <div style={{ display: 'grid', gap: 16 }}>
         {items.map(item => (
@@ -336,7 +401,7 @@ function DocEditor({ kind, document, title, disabled, onSave, onRegenerate }: {
       <textarea className="f" style={{ height: 320, fontFamily: 'inherit' }} value={text} disabled={disabled} onChange={event => setText(event.target.value)} aria-label={`${name} text`} />
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <button className="chip" disabled={disabled || text === document.content || !text.trim()} onClick={() => onSave(text)}>Save as new version</button>
-        <button className="chip" disabled={!text.trim()} onClick={() => printDocument(text, title)}>Download PDF</button>
+        <button className="chip" disabled={!text.trim()} onClick={() => printDocument(text, title, kind === 'cover_letter')}>Download PDF</button>
         <button className="chip" disabled={disabled} onClick={onRegenerate}>Regenerate</button>
       </div>
       <p className="m" style={{ marginTop: 10 }}>
@@ -355,11 +420,13 @@ function escapeHtml(value: string) {
 }
 
 /** Render the small Markdown subset used by the generated documents. */
-function documentHtml(text: string, title: string) {
+function documentHtml(text: string, title: string, letter: boolean) {
   const parts: string[] = []
+  const closing = /^(best regards|kind regards|warm regards|yours sincerely|yours faithfully|sincerely|regards),?$/i
+  const lines = text.split('\n')
   let inList = false
-  for (const raw of text.split('\n')) {
-    const line = raw.trimEnd()
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trimEnd()
     const item = line.startsWith('- ')
     if (inList && !item) {
       parts.push('</ul>')
@@ -385,10 +452,20 @@ function documentHtml(text: string, title: string) {
       parts.push(`<p><i>${escapeHtml(italic[1])}</i></p>`)
       continue
     }
+    if (letter && closing.test(line)) {
+      const name = (lines[i + 1] ?? '').trim()
+      if (name) {
+        i++
+        parts.push(`<p class="signoff">${escapeHtml(line)}<br>${escapeHtml(name)}</p>`)
+      } else {
+        parts.push(`<p class="signoff">${escapeHtml(line)}</p>`)
+      }
+      continue
+    }
     parts.push(`<p>${escapeHtml(line)}</p>`)
   }
   if (inList) parts.push('</ul>')
-  const css =
+  let css =
     'body{font:10.5pt/1.4 Helvetica,Arial,sans-serif;color:#111;margin:0}'
     + 'h1{font-size:20pt;margin:0 0 4px}'
     + 'h2{font-size:12pt;border-bottom:1px solid #999;margin:14px 0 6px;text-transform:uppercase}'
@@ -396,10 +473,17 @@ function documentHtml(text: string, title: string) {
     + 'p{margin:3px 0}'
     + 'ul{margin:2px 0 6px 18px;padding:0}'
     + '@page{margin:18mm 16mm}'
+  if (letter) {
+    css +=
+      'body{font:11pt/1.6 Helvetica,Arial,sans-serif}'
+      + 'p{margin:0 0 11px}'
+      + 'p.signoff{margin-top:16px}'
+      + '@page{margin:20mm 18mm}'
+  }
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${css}</style></head><body>${parts.join('')}</body></html>`
 }
 
-function printDocument(text: string, title: string) {
+function printDocument(text: string, title: string, letter: boolean) {
   const win = window.open('', '_blank')
   if (!win) {
     const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
@@ -412,7 +496,7 @@ function printDocument(text: string, title: string) {
     return
   }
   win.document.open()
-  win.document.write(documentHtml(text, title))
+  win.document.write(documentHtml(text, title, letter))
   win.document.close()
   win.focus()
   window.setTimeout(() => win.print(), 250)

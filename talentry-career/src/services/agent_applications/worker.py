@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 import psycopg
@@ -22,6 +23,57 @@ from .agent import (
 )
 
 log = logging.getLogger("talentry.agent")
+
+# Plain-language reasons a run can stop. The technical text stays in the logs
+# and in the Activity list; the user gets one sentence they can act on.
+_PLAIN_REASONS: list[tuple[str, str]] = [
+    (
+        r"captcha|not a robot|prove (that )?you are (a )?human",
+        "The employer's page asked for a CAPTCHA, which Talentry cannot solve. "
+        "Finish this application on their site, or try again later.",
+    ),
+    (
+        r"sign in|sign-in|log in|login|password|create an account",
+        "This application needs an account or a sign-in on the employer's site.",
+    ),
+    (
+        r"timed out|timeout|deadline exceeded",
+        "The employer's site stopped responding.",
+    ),
+    (
+        r"net::|err_|connection (refused|reset)|could not be reached|"
+        r"name or service not known|dns",
+        "Talentry could not reach the employer's site.",
+    ),
+    (
+        r"page (did not|no longer)|no form|application form|"
+        r"could not (open|load)|404",
+        "The application page could not be opened.",
+    ),
+    (
+        r"form changed|no longer match",
+        "The form changed while Talentry was filling it, so the answers no "
+        "longer matched.",
+    ),
+]
+
+
+def explain(exc: Exception) -> str:
+    """One sentence for the user: why this run could not continue."""
+    text = str(exc).strip()
+    for pattern, reason in _PLAIN_REASONS:
+        if re.search(pattern, text.lower()):
+            return reason
+    # Messages written for the user already (e.g. "The employer site blocked
+    # automated access.") are kept as they are.
+    if (
+        text
+        and len(text) <= 240
+        and text[0].isupper()
+        and text.endswith((".", "!", "?"))
+    ):
+        return text
+    return "Something went wrong while Talentry was filling in the form."
 
 
 class Worker:
@@ -63,6 +115,7 @@ class Worker:
         conn: psycopg.Connection,
         application: dict[str, Any],
         outcome: str,
+        body: str | None = None,
     ) -> None:
         messages = {
             "needs_input": (
@@ -81,8 +134,12 @@ class Worker:
                 "Check your application",
                 "The application was sent, but it could not be confirmed.",
             ),
+            "failed": (
+                "Application could not be completed",
+                "Open the application to see why and try again.",
+            ),
         }
-        title, body = messages.get(
+        title, default_body = messages.get(
             outcome,
             ("Application needs attention", "Open the application to review it."),
         )
@@ -92,7 +149,7 @@ class Worker:
                 application,
                 outcome,
                 title,
-                body,
+                body or default_body,
             )
         except psycopg.Error:
             log.exception("Could not create notification.")
@@ -139,10 +196,10 @@ class Worker:
         except store.Cancelled:
             log.info("Application %s was changed by the user.", application_id)
         except ActionError as exc:
-            await self.failed(conn, agent, application, str(exc))
+            await self.failed(conn, agent, application, exc)
         except Exception as exc:
             log.exception("Application %s failed.", application_id)
-            await self.failed(conn, agent, application, str(exc))
+            await self.failed(conn, agent, application, exc)
 
     async def manual(
         self,
@@ -249,11 +306,12 @@ class Worker:
         conn: psycopg.Connection,
         agent: Agent | None,
         application: dict[str, Any],
-        message: str,
+        exc: Exception,
     ) -> None:
         if agent is not None and agent.clicked_submit:
-            await self.unconfirmed(conn, application, message)
+            await self.unconfirmed(conn, application, explain(exc))
             return
+        reason = explain(exc)
         attempts = int(application.get("attempts") or 0)
         if attempts + 1 < settings.AGENT_MAX_ATTEMPTS:
             try:
@@ -267,13 +325,13 @@ class Worker:
                     application["id"],
                     retry_status,
                     min(60, 5 * (attempts + 1)),
-                    message,
+                    reason,
                 )
                 store.event(
                     conn,
                     application["id"],
                     "retry",
-                    f"Attempt {attempts + 1} failed: {message}",
+                    f"Attempt {attempts + 1} failed: {reason}",
                 )
             except store.Cancelled:
                 return
@@ -283,17 +341,17 @@ class Worker:
                 conn,
                 application["id"],
                 "failed",
-                error=message,
+                error=reason,
             )
             store.event(
                 conn,
                 application["id"],
                 "failed",
-                message,
+                reason,
             )
         except store.Cancelled:
             return
-        self.notify(conn, application, "failed")
+        self.notify(conn, application, "failed", reason)
 
 
 async def main() -> None:

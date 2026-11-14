@@ -17,11 +17,22 @@ export interface Attention {
   id: string
   kind: 'question' | 'manual'
   question: string
+  label?: string | null
   why?: string | null
   context?: string | null
   options: string[] | null
   sensitive?: boolean
   answer: string | null
+}
+
+export interface CandidateCard {
+  name: string | null
+  email: string | null
+  phone: string | null
+  location: string | null
+  linkedinUrl: string | null
+  githubUrl: string | null
+  websiteUrl: string | null
 }
 
 export interface Field {
@@ -74,6 +85,7 @@ export interface Detail {
   events: ApplicationEvent[]
   result: { confirmation?: string; manual?: boolean } | null
   screenshot: string | null
+  candidate?: CandidateCard | null
   updatedAt: string
   approvedAt: string | null
   submittedAt: string | null
@@ -100,13 +112,13 @@ export interface Batch {
 export const STATUS_TEXT: Record<Status, [string, string]> = {
   queued: ['Queued', 'Waiting for Talentry to pick this up.'],
   in_progress: ['Preparing', 'Talentry is working on the application form.'],
-  needs_input: ['Needs you', 'Paused until you answer or take a step.'],
+  needs_input: ['Needs you', 'All the open questions are on this page. Answer them once to continue.'],
   pending_approval: ['Ready for review', 'Check everything, then approve to submit.'],
   approved: ['Submitting soon', 'Approved. Talentry is about to submit.'],
   submitting: ['Submitting', 'Sending the application now.'],
   submitted: ['Submitted', 'The application was sent.'],
   unconfirmed: ['Check this one', 'We clicked submit but could not confirm it.'],
-  failed: ['Failed', 'Something went wrong.'],
+  failed: ['Stopped', 'It could not finish. Your answers are kept, so Try again resumes.'],
   cancelled: ['Cancelled', 'You cancelled this application.'],
 }
 

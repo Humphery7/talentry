@@ -45,6 +45,8 @@ crawler (Python) ──writes jobs + vectors──▶ Postgres ◀──reads/wr
   extension. A free [Neon](https://neon.tech) database works out of the box; a
   local Postgres needs pgvector installed.
 - **Google Chrome** for the auto-apply worker (Playwright drives it).
+- Optional: **LibreOffice**, so a tailored CV can keep the layout of an
+  uploaded DOCX.
 - Optional: **ngrok**, only if you use the root `npm run dev` script, because
   that script also starts a tunnel.
 
@@ -234,12 +236,48 @@ On macOS 13, Playwright 1.64 has no bundled Chromium. Set
 `PLAYWRIGHT_CHANNEL=chrome` in `talentry-career/.env` to use your installed
 Chrome instead.
 
+Tailored CVs are converted from DOCX to PDF with **LibreOffice**, which runs
+headless:
+
+```bash
+# macOS
+brew install --cask libreoffice
+# Ubuntu / the deployment VM
+sudo apt install libreoffice-writer --no-install-recommends
+```
+
+Without it, auto-apply still works but the generated CV uses the built-in
+layout instead of the one in your uploaded DOCX.
+
 The worker opens the employer's page in a real browser, fills what it can from
 your profile and CV, and pauses for you to answer missing questions or approve
 the submission. It cannot solve CAPTCHAs: when one blocks submission, the
 application pauses with an **Action needed** note, and you finish it on the
 employer's site. The application page has a **Copy my details** button and a
 **Download PDF** button for exactly that handoff.
+
+Answers are handled in two places:
+
+- **Your profile** holds durable facts (name, phone, location, links) and the
+  agent reads them on every application.
+- **The answer bank** remembers ordinary questions so the next application does
+  not ask them again. It is keyed by the question text, so a site that reloads
+  with different internal field ids still gets the same answer.
+
+Answers that depend on the job or the country — work authorization, visa
+sponsorship, salary, notice period, legal declarations and demographic
+questions — are **never written to the answer bank**. They are kept only on
+that application (so a retry does not ask twice) and are deleted with it. The
+agent always asks you these again, because the right answer changes from one
+job to the next.
+
+If a run fails, the application page says why in one sentence. **Try again**
+resumes the same application with the same answers; nothing is asked twice and
+nothing already filled is lost.
+
+Upload a **DOCX** CV in your profile if you want the tailored CV to keep your
+own layout — fonts, margins, bullets and dates stay as you designed them.
+A PDF upload keeps its text but is generated with the built-in template.
 
 ## Step 5 — Frontend
 

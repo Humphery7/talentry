@@ -11,7 +11,7 @@ from psycopg.types.json import Jsonb
 
 from schemas.agent_applications import AgentApplicationStatus
 
-from .facts import normalize
+from .facts import classify, normalize
 
 ACTIVE_STATUSES = (
     AgentApplicationStatus.in_progress.value,
@@ -29,6 +29,65 @@ class NotFound(RuntimeError):
 
 class InvalidState(RuntimeError):
     """The application is not in a state that allows this action."""
+
+
+# Answers that depend on local law, money or the employer's policy. They are
+# kept on the application (so a retry does not ask twice) but never in the
+# user-wide answer bank: the same question has a different right answer from
+# one job or country to the next.
+SENSITIVE_CATEGORIES = (
+    "work authorization",
+    "legal declaration",
+    "demographic",
+    "compensation",
+    "availability",
+)
+
+
+def answer_key(item: dict[str, Any]) -> str:
+    """The bank key for one answered question.
+
+    Facts use a stable `fact:<name>` key. Everything else is keyed by the
+    normalised question text, which is what the next run looks up. The old
+    code used the site's field id, which changes between runs.
+    """
+    if item.get("fact_key"):
+        return f"fact:{item['fact_key']}"
+    label = item.get("label") or item.get("question") or ""
+    return f"q:{normalize(label)}"
+
+
+def reusable(item: dict[str, Any]) -> bool:
+    """False for answers that must not be replayed on another application."""
+    if item.get("sensitive"):
+        return False
+    return not classify(item.get("label") or item.get("question") or "")
+
+
+def missing_setup(
+    conn: psycopg.Connection,
+    user_id: UUID | str,
+) -> list[str]:
+    """Profile items the agent cannot start an application without.
+
+    Only the CV is required here: the agent reads it to build documents, so a
+    missing CV would fail every run. Phone and location are asked on the
+    questions screen when a form actually needs them.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT cv_data
+            FROM candidate_profiles
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+        row = cur.fetchone() or {}
+
+    if not (row.get("cv_data") or "").strip():
+        return ["your CV"]
+    return []
 
 
 def recover_stale(conn: psycopg.Connection, minutes: int) -> None:
@@ -126,6 +185,7 @@ def load_context(
         bank = {
             row["question_key"]: row
             for row in cur.fetchall()
+            if reusable(row)
         }
 
     return {
@@ -290,12 +350,13 @@ def add_doc(
     content: str,
     origin: str,
     notes: list[str],
+    pdf: bytes | None = None,
 ) -> int:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
             INSERT INTO agent_application_documents
-              (agent_application_id, kind, version, content, origin, notes)
+              (agent_application_id, kind, version, content, origin, notes, pdf)
             VALUES (
               %s,
               %s,
@@ -304,6 +365,7 @@ def add_doc(
                 FROM agent_application_documents
                 WHERE agent_application_id = %s AND kind = %s
               ),
+              %s,
               %s,
               %s,
               %s
@@ -318,6 +380,7 @@ def add_doc(
                 content,
                 origin,
                 Jsonb(notes),
+                pdf,
             ),
         )
         row = cur.fetchone()
@@ -458,12 +521,10 @@ def answer(
             continue
         item["answer"] = text
         answered += 1
-        question_key = (
-            f"fact:{item['fact_key']}"
-            if item.get("fact_key")
-            else item.get("field_key")
-            or normalize(item.get("question"))
-        )
+        # Sensitive answers stay on this application (attention) so a retry
+        # does not ask again, but are never written to the user-wide bank.
+        if not reusable(item):
+            continue
         conn.execute(
             """
             INSERT INTO applicant_answers
@@ -476,8 +537,8 @@ def answer(
             """,
             (
                 user_id,
-                question_key,
-                item.get("question") or question_key,
+                answer_key(item),
+                item.get("question") or answer_key(item),
                 text,
             ),
         )
@@ -567,6 +628,9 @@ def approve(
             key: {
                 "value": value.get("value"),
                 "doc": value.get("doc"),
+                # Kept so a site that renames its field ids between approval
+                # and submission still matches the approved answer.
+                "label": value.get("label"),
             }
             for key, value in fields.items()
         },

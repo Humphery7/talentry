@@ -10,7 +10,7 @@ REST API over the same Neon Postgres database the crawler writes.
 | `GET /jobs`, `GET /jobs/:id` | – | Search (filters + paging) / one job |
 | `GET /companies`, `GET /companies/:slug` | – | List / one company with its open jobs |
 | `GET /candidate-profile`, `PUT /candidate-profile` | JWT | Read / save your optional career details |
-| `PUT /candidate-profile/cv`, `GET /candidate-profile/cv` | JWT | Upload a PDF CV / download its extracted text |
+| `PUT /candidate-profile/cv`, `GET /candidate-profile/cv` | JWT | Upload a PDF or DOCX CV / download its extracted text |
 | `POST /applications`, `GET /applications` | JWT | Apply to a job / list my applications |
 | `POST /agent-applications` | JWT | Queue selected jobs for Talentry's auto-apply agent |
 | `POST /agent-applications/queue-top` | JWT | Queue the best recommended jobs |

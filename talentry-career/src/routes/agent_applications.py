@@ -76,8 +76,22 @@ def _state_error(exc: store.InvalidState) -> HTTPException:
     return HTTPException(status_code=409, detail=str(exc))
 
 
+def _join(items: list[str]) -> str:
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
 @router.post("", response_model=StartResult, status_code=202)
 def start(body: StartRequest, conn: ConnectionDep) -> StartResult:
+    missing = store.missing_setup(conn, body.user_id)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail="Before applying, add "
+            + _join(missing)
+            + " in your profile.",
+        )
     try:
         batch_id, jobs, skipped = enqueue(
             conn,

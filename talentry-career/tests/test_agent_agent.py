@@ -8,6 +8,7 @@ from schemas.agent import (
     FormObservation,
     FormOption,
 )
+from schemas.agent_applications import AttentionItem
 from schemas.browser import ActionResult
 from services.agent_applications.agent import Agent
 from services.agent_applications import facts
@@ -243,3 +244,86 @@ def test_manual_notes_do_not_block_approval() -> None:
     assert open_questions([{"kind": "question", "answer": None}]) == [
         {"kind": "question", "answer": None}
     ]
+
+
+def test_saved_sensitive_answer_is_never_reused() -> None:
+    value = agent()
+    value.bank = {
+        "q:salary expectation": {
+            "question": "Salary expectation",
+            "answer": "50000",
+        }
+    }
+    salary = field("salary", "Salary expectation", required=True)
+
+    assert value.deterministic(salary) is None
+    assert value.pending()[-1].sensitive is True
+
+
+def test_an_answer_is_reused_when_the_site_renames_the_field() -> None:
+    value = agent()
+    value.attention = [
+        AttentionItem(
+            id="salary",
+            kind="question",
+            field_key="salary:number",
+            label="Salary expectation",
+            question="What should I put for “Salary expectation”?",
+            answer="45000",
+        )
+    ]
+    renamed = field("salary-2", "Salary expectation", required=True)
+
+    entry = value.user_or_saved(renamed)
+
+    assert entry is not None
+    assert entry.value == "45000"
+    assert entry.status == "user"
+
+
+def test_a_plan_entry_survives_a_changed_field_key() -> None:
+    value = agent()
+    old = field("old-key", "Current company", required=True)
+    value.fields[old.key] = value.entry(old, "Glovo", "user", "user")
+
+    renamed = field("new-key", "Current company", required=True)
+    observation = FormObservation(
+        url="https://example.com",
+        title="Form",
+        text="",
+        fields=[renamed],
+    )
+
+    todo = asyncio.run(value.settle(observation))
+
+    assert todo == []
+    assert value.tools.calls == [("fill", "new-key", "Glovo")]
+
+
+def test_the_same_question_is_only_asked_once() -> None:
+    value = agent()
+    phone = field("phone", "Phone", required=True)
+
+    value.ask(phone, "Your profile does not have a phone.", fact_key="phone")
+    value.ask(phone, "I could not determine this answer.")
+
+    questions = [item for item in value.attention if item.kind == "question"]
+    assert len(questions) == 1
+    assert questions[0].label == "Phone"
+
+
+def test_a_new_style_saved_answer_is_found_by_its_label() -> None:
+    value = agent()
+    value.bank = {
+        "q:current company": {
+            "question": "What should I put for “Current company”?",
+            "answer": "Glovo",
+        }
+    }
+    company = field("company-9", "Current company", required=True)
+
+    entry = value.user_or_saved(company)
+
+    assert entry is not None
+    assert entry.value == "Glovo"
+    assert entry.status == "saved"

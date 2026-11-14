@@ -88,6 +88,17 @@ interface DocumentGroup extends CareerDocument {
   versions: { version: number; origin: string }[];
 }
 
+/** Contact details the candidate can paste when finishing by hand. */
+interface CandidateCard {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  location: string | null;
+  linkedinUrl: string | null;
+  githubUrl: string | null;
+  websiteUrl: string | null;
+}
+
 const MISSING_TABLE = '42P01';
 const EDITABLE = ['needs_input', 'pending_approval', 'approved'];
 const PAUSED = ['needs_input', 'pending_approval'];
@@ -306,7 +317,22 @@ export async function get(userId: string, id: string) {
     fields,
     documents: groupDocuments(detail.documents ?? []),
     events: await eventsFor(id),
+    candidate: await candidateFor(userId),
   };
+}
+
+async function candidateFor(userId: string): Promise<CandidateCard | null> {
+  const { rows } = await pool.query<CandidateCard>(
+    `SELECT u.name, u.email, p.phone, p.location,
+            p.linkedin_url AS "linkedinUrl",
+            p.github_url AS "githubUrl",
+            p.website_url AS "websiteUrl"
+     FROM users u
+     LEFT JOIN candidate_profiles p ON p.user_id = u.id
+     WHERE u.id = $1`,
+    [userId],
+  );
+  return rows[0] ?? null;
 }
 
 export async function answer(

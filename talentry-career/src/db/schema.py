@@ -161,6 +161,12 @@ CREATE TABLE IF NOT EXISTS agent_application_documents (
 )
 """
 
+# The rendered PDF as it was generated, when the candidate's own DOCX template
+# was used. Without it the worker renders the stored content instead.
+ALTER_AGENT_APPLICATION_DOCUMENTS = """
+ALTER TABLE agent_application_documents ADD COLUMN IF NOT EXISTS pdf BYTEA;
+"""
+
 CREATE_AGENT_APPLICATION_EVENTS = """
 CREATE TABLE IF NOT EXISTS agent_application_events (
   id BIGSERIAL PRIMARY KEY,
@@ -217,6 +223,7 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     conn.execute(ALTER_AGENT_APPLICATIONS)
     conn.execute(CREATE_AGENT_APPLICATION_INDEXES)
     conn.execute(CREATE_AGENT_APPLICATION_DOCUMENTS)
+    conn.execute(ALTER_AGENT_APPLICATION_DOCUMENTS)
     conn.execute(CREATE_AGENT_APPLICATION_EVENTS)
     conn.execute(CREATE_APPLICANT_ANSWERS)
     conn.execute(CREATE_NOTIFICATIONS)

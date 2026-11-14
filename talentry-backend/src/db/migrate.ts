@@ -38,6 +38,10 @@ export async function runMigrations() {
       cv_filename TEXT,
       cv_mime TEXT,
       cv_data TEXT,
+      -- The uploaded file itself. DOCX uploads keep their layout and are
+      -- tailored in place; PDFs only provide text.
+      cv_file BYTEA,
+      cv_file_mime TEXT,
       cv_updated_at TIMESTAMPTZ,
       profile_embedding vector(384),
       embedding_updated_at TIMESTAMPTZ,
@@ -53,6 +57,8 @@ export async function runMigrations() {
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_filename TEXT;
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_mime TEXT;
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_data TEXT;
+    ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_file BYTEA;
+    ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_file_mime TEXT;
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS cv_updated_at TIMESTAMPTZ;
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS profile_embedding vector(384);
     ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ;
@@ -195,9 +201,13 @@ export async function runMigrations() {
       content TEXT NOT NULL,
       origin TEXT NOT NULL,
       notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+      -- Set when the candidate's own DOCX layout was used; the worker uploads
+      -- this PDF instead of rendering the content.
+      pdf BYTEA,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (agent_application_id, kind, version)
     );
+    ALTER TABLE agent_application_documents ADD COLUMN IF NOT EXISTS pdf BYTEA;
 
     CREATE TABLE IF NOT EXISTS agent_application_events (
       id BIGSERIAL PRIMARY KEY,

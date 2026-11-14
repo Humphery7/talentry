@@ -7,9 +7,15 @@ const COLUMNS = `
   years_experience AS "yearsExperience", location, phone,
   linkedin_url AS "linkedinUrl", github_url AS "githubUrl",
   website_url AS "websiteUrl", summary,
-  cv_filename AS "cvFilename", cv_updated_at AS "cvUpdatedAt",
+  cv_filename AS "cvFilename", cv_mime AS "cvMime",
+  cv_file_mime AS "cvFileMime",
+  cv_updated_at AS "cvUpdatedAt",
   updated_at AS "updatedAt"
 `;
+
+export const PDF_MIME = 'application/pdf';
+export const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 const SELECT = `SELECT ${COLUMNS} FROM candidate_profiles`;
 
@@ -72,18 +78,23 @@ export async function saveCv(
   filename: string,
   mime: string,
   data: string,
+  file: Buffer,
 ) {
   const { rows } = await pool.query(
-    `INSERT INTO candidate_profiles (user_id, cv_filename, cv_mime, cv_data, cv_updated_at)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO candidate_profiles
+       (user_id, cv_filename, cv_mime, cv_data, cv_file, cv_file_mime,
+        cv_updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, now())
      ON CONFLICT (user_id) DO UPDATE SET
        cv_filename = EXCLUDED.cv_filename,
        cv_mime = EXCLUDED.cv_mime,
        cv_data = EXCLUDED.cv_data,
+       cv_file = EXCLUDED.cv_file,
+       cv_file_mime = EXCLUDED.cv_file_mime,
        cv_updated_at = now(),
        updated_at = now()
      RETURNING ${COLUMNS}`,
-    [userId, filename, mime, data],
+    [userId, filename, mime, data, file, mime],
   );
   await updateEmbedding(userId);
   return rows[0];
@@ -106,4 +117,13 @@ export async function parsePDF(data: Buffer): Promise<string> {
   const parser = new PDFParse({ data: data });
   const result = await parser.getText();
   return result.text;
+}
+
+export async function parseDocx(data: Buffer): Promise<string> {
+  // mammoth is CommonJS; its named exports are not always detected by the ESM
+  // loader, so fall back to the default export.
+  const imported = await import('mammoth');
+  const mammoth = imported.default ?? imported;
+  const result = await mammoth.extractRawText({ buffer: data });
+  return result.value;
 }

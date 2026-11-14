@@ -46,6 +46,9 @@ class AttentionItem(BaseModel):
     id: str
     kind: Literal["question", "manual"]
     field_key: str | None = None
+    # The form label, kept so an answer can be matched to the same question
+    # even when the site generates a different internal field id.
+    label: str | None = None
     question: str
     why: str | None = None
     context: str | None = None

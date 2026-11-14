@@ -26,7 +26,7 @@ from services.browser import BrowserSession, ToolError
 from services.browser.safety import APPLY_RE, NEXT_RE, SUBMIT_RE
 from services.gemini import generate_json
 
-from . import documents, facts, store
+from . import documents, docx_cv, facts, store
 from .form import build_observation
 
 DONE_STATUSES = {"filled", "draft", "user", "saved", "document"}
@@ -256,12 +256,20 @@ class Agent:
 
     def add_attention(self, item: AttentionItem) -> None:
         for existing in self.attention:
-            if (
-                existing.field_key
+            if existing.answer or existing.kind != item.kind:
+                continue
+            same_field = (
+                existing.field_key is not None
                 and existing.field_key == item.field_key
-                and existing.kind == item.kind
-                and not existing.answer
-            ):
+            )
+            same_label = (
+                item.kind == "question"
+                and existing.label is not None
+                and item.label is not None
+                and facts.normalize(existing.label)
+                == facts.normalize(item.label)
+            )
+            if same_field or same_label:
                 return
         self.attention.append(item)
 
@@ -299,6 +307,7 @@ class Agent:
                 id=uuid4().hex[:12],
                 kind="question",
                 field_key=field.key,
+                label=field.label,
                 question=question
                 or f"What should I put for “{field.label}”?",
                 why=why,
@@ -359,6 +368,80 @@ class Agent:
                 entry.value = row["content"]
                 entry.status = "draft"
 
+    def known(self, field: FormField) -> PlanField | None:
+        """The saved answer for this field, even if its key changed.
+
+        Sites generate a fresh internal id on some reloads, so the plan is
+        matched by question text as a fallback. Ambiguous labels are never
+        reused: two fields with the same label could hold different answers.
+        """
+        entry = self.fields.get(field.key)
+        if entry is not None:
+            return entry
+        wanted = facts.normalize(field.label)
+        if not wanted:
+            return None
+        matches = [
+            saved
+            for saved in self.fields.values()
+            if facts.normalize(saved.label) == wanted
+        ]
+        if len(matches) != 1:
+            return None
+        entry = matches[0]
+        # Drop the old key so the plan and the review screen do not show the
+        # same answer twice.
+        for key in [
+            key for key, saved in self.fields.items() if saved is entry
+        ]:
+            self.fields.pop(key, None)
+        self.fields[field.key] = entry
+        return entry
+
+    def asked(self, field: FormField) -> bool:
+        """True when this exact question is already waiting for an answer."""
+        wanted = facts.normalize(field.label)
+        for item in self.attention:
+            if item.kind != "question" or item.answer:
+                continue
+            if item.field_key and item.field_key == field.key:
+                return True
+            if wanted and item.label and facts.normalize(item.label) == wanted:
+                return True
+        return False
+
+    def _cv(self) -> tuple[str, str, list[str], bytes | None, int | None]:
+        """Build the CV, reusing the candidate's own DOCX layout when possible."""
+        template = self.profile.get("cv_file")
+        if template:
+            if not docx_cv.is_template(bytes(template)):
+                self.warn(
+                    "Your uploaded DOCX could not be edited safely (for "
+                    "example it uses a table layout), so the standard CV "
+                    "layout was used."
+                )
+            else:
+                try:
+                    tailored = docx_cv.tailor(
+                        bytes(template), self.facts, self.cv_text, self.job
+                    )
+                    return (
+                        tailored.content,
+                        "tailored",
+                        tailored.notes,
+                        tailored.pdf,
+                        tailored.pages,
+                    )
+                except Exception as exc:
+                    self.warn(
+                        "Could not reuse your own CV layout "
+                        f"({exc}); used the standard layout instead."
+                    )
+        content, origin, notes = documents.generate_cv(
+            self.facts, self.cv_text, self.job
+        )
+        return content, origin, notes, None, None
+
     def ensure_documents(self, observation: FormObservation) -> None:
         if not self.cv_text:
             raise NeedsManual(
@@ -366,9 +449,7 @@ class Agent:
             )
         regenerate = set(self.options.get("regenerate") or [])
         if not self.doc("cv") or "cv" in regenerate:
-            content, origin, notes = documents.generate_cv(
-                self.facts, self.cv_text, self.job
-            )
+            content, origin, notes, pdf, pages = self._cv()
             store.add_doc(
                 self.conn,
                 self.application_id,
@@ -376,10 +457,12 @@ class Agent:
                 content,
                 origin,
                 notes,
+                pdf=pdf,
             )
             for note in notes:
                 self.warn(note)
-            self.log("document", f"Prepared CV ({origin}).")
+            size = f", {pages} page{'s' if pages != 1 else ''}" if pages else ""
+            self.log("document", f"Prepared CV ({origin}{size}).")
 
         wants_letter = bool(self.options.get("coverLetter")) or any(
             "cover letter" in facts.normalize(field.label)
@@ -421,9 +504,15 @@ class Agent:
         if key in self._pdfs:
             return self._pdfs[key]
         path = Path(self._tmp.name) / f"{kind}-{uuid4().hex[:8]}.pdf"
-        await self.session.render_pdf(
-            documents.to_html(row["content"]), path
-        )
+        stored = row.get("pdf")
+        if stored:
+            # Built from the candidate's own DOCX; no re-render needed.
+            path.write_bytes(bytes(stored))
+        else:
+            await self.session.render_pdf(
+                documents.to_html(row["content"], letter=kind == "cover_letter"),
+                path,
+            )
         self._pdfs[key] = path
         return path
 
@@ -450,8 +539,17 @@ class Agent:
         return text
 
     def user_or_saved(self, field: FormField) -> PlanField | None:
+        wanted = facts.normalize(field.label)
         for item in self.attention:
-            if item.field_key != field.key or not item.answer:
+            if item.kind != "question" or not item.answer:
+                continue
+            same_field = item.field_key and item.field_key == field.key
+            same_label = (
+                wanted
+                and item.label
+                and facts.normalize(item.label) == wanted
+            )
+            if not (same_field or same_label):
                 continue
             try:
                 value = self.coerce(field, item.answer)
@@ -460,8 +558,15 @@ class Agent:
                 return None
             return self.entry(field, value, "user", "user")
 
-        saved = self.bank.get(facts.normalize(field.label)) or self.bank.get(
-            field.key
+        # Sensitive answers are deliberately not replayed on another
+        # application: the right answer depends on the job and the country.
+        if facts.classify(field.label, field.section or ""):
+            return None
+
+        saved = (
+            self.bank.get(f"q:{wanted}")
+            or self.bank.get(wanted)
+            or self.bank.get(field.key)
         )
         if saved and (saved.get("answer") or "").strip():
             try:
@@ -653,6 +758,10 @@ class Agent:
         todo: list[FormField] = []
         for field in observation.fields:
             entry = self.fields.get(field.key)
+            if entry is None:
+                # Keep the answer when the site renamed its field id. This is
+                # still an approved answer: `known()` only reuses the plan.
+                entry = self.known(field)
             if only_approved:
                 if entry is None:
                     if field.required:
@@ -1126,17 +1235,19 @@ class Agent:
 
     async def finish_prepare(self, observation: FormObservation) -> str:
         for field in observation.fields:
-            entry = self.fields.get(field.key)
+            entry = self.known(field)
             if entry and (
                 entry.status in DONE_STATUSES
                 or entry.status == "skipped"
             ):
                 continue
             if field.required:
-                self.ask(
-                    field,
-                    "I could not determine this answer.",
-                )
+                # One questions screen: never ask the same thing twice.
+                if not self.asked(field):
+                    self.ask(
+                        field,
+                        "I could not determine this answer.",
+                    )
             else:
                 self.fields[field.key] = self.entry(
                     field, "", "skip", "skipped"
@@ -1195,6 +1306,14 @@ class Agent:
         approved_fields = snapshot.get("fields") or {}
         for key, approved in approved_fields.items():
             entry = self.fields.get(key)
+            if entry is None and approved.get("label"):
+                wanted = facts.normalize(approved["label"])
+                matches = [
+                    saved
+                    for saved in self.fields.values()
+                    if facts.normalize(saved.label) == wanted
+                ]
+                entry = matches[0] if len(matches) == 1 else None
             if (
                 entry is None
                 or entry.value != approved.get("value")

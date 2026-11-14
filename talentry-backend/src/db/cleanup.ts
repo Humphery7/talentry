@@ -6,15 +6,32 @@
 // description/embedding payloads are cleared).
 import { pool } from './pool.js';
 
-const CLOSED_DELETE_DAYS = 7; // closed jobs are removed after a short grace
-const CLOSED_HEAVY_DAYS = 7; // ...and keep only a slim row if referenced
-const STALE_OPEN_DAYS = 90; // open jobs the crawler has not seen in 90 days
+// One day, not zero: closing is inferred from a job missing on one crawl, and
+// the next day's crawl reopens it. Immediate deletion would drop job ids and
+// force a re-insert (and re-embed) whenever a board has a bad day.
+const CLOSED_DELETE_DAYS = 1; // closed jobs are removed after a short grace
+const CLOSED_HEAVY_DAYS = 1; // ...and keep only a slim row if referenced
+const STALE_OPEN_DAYS = 30; // open jobs the crawler has not seen in 30 days
 const CRAWLER_ALIVE_DAYS = 7; // only prune stale open jobs while crawling works
 const CANCELLED_DELETE_HOURS = 24; // cancelled applications
 const SUBMITTED_RETAIN_DAYS = 30; // keep submitted docs/details this long, then only the reference
-const NOTIFICATION_DAYS = 60; // delete read notifications
-const EVENT_DAYS = 90; // delete events for other finished applications
-const SCREENSHOT_DAYS = 90; // drop screenshots/browser state for other finished apps
+const NOTIFICATION_DAYS = 30; // delete read notifications
+const EVENT_DAYS = 30; // delete events for other finished applications
+const SCREENSHOT_DAYS = 30; // drop screenshots/browser state for other finished apps
+
+// Mirrors `classify()` in talentry-career/src/services/agent_applications/
+// facts.py. Kept here so old rows can be removed even though the career
+// service no longer writes them.
+const SENSITIVE_QUESTION = [
+  'authori[sz]ed to work|work authori[sz]ation|right to work|work permit',
+  'work visa|\\mvisa\\M|sponsor|immigration|citizen|nationality',
+  'salary|compensation|expected pay|desired rate|remuneration',
+  'notice period|start date|available to start|relocat',
+  'convict|criminal|felony|background check|drug test|conflict of interest',
+  'non-?compete|restrictive covenant|gdpr|privacy policy|under oath',
+  'gender|racial|ethnic|veteran|disabilit|sexual orientation|religion',
+  'marital|date of birth|self-identif|equal opportunity|\\meeo\\M',
+].join('|');
 
 const RUN_EVERY_MS = 24 * 60 * 60 * 1000;
 const FIRST_RUN_MS = 2 * 60 * 1000;
@@ -28,6 +45,7 @@ interface Counts {
   notificationsDeleted: number;
   eventsDeleted: number;
   applicationsShrunk: number;
+  answersDeleted: number;
 }
 
 /**
@@ -44,6 +62,7 @@ export async function runCleanup(): Promise<Counts> {
     notificationsDeleted: 0,
     eventsDeleted: 0,
     applicationsShrunk: 0,
+    answersDeleted: 0,
   };
 
   // A cancelled application is only useful as a short-lived receipt. Removing
@@ -56,6 +75,20 @@ export async function runCleanup(): Promise<Counts> {
       [CANCELLED_DELETE_HOURS],
     );
     counts.applicationsDeleted = rowCount ?? 0;
+  });
+
+  // Sensitive answers (work authorization, salary, legal declarations and so
+  // on) are stored on the application only, never in the answer bank: the
+  // right answer changes with the job and the country. This removes anything
+  // saved by earlier versions. The pattern mirrors `classify()` in the career
+  // service's facts.py.
+  await step('applicant answers: delete sensitive', counts, async () => {
+    const { rowCount } = await pool.query(
+      `DELETE FROM applicant_answers
+       WHERE question ~* $1`,
+      [SENSITIVE_QUESTION],
+    );
+    counts.answersDeleted = rowCount ?? 0;
   });
 
   // A submitted application is kept as a permanent "already applied" record,
@@ -227,13 +260,14 @@ export async function runCleanup(): Promise<Counts> {
 
   const changed =
     counts.jobsSlimmed +
-      counts.jobsDeleted +
-      counts.applicationsDeleted +
-      counts.documentsDeleted +
-      counts.applicationsCleared +
-      counts.notificationsDeleted +
-      counts.eventsDeleted +
-      counts.applicationsShrunk >
+    counts.jobsDeleted +
+    counts.applicationsDeleted +
+    counts.documentsDeleted +
+    counts.applicationsCleared +
+    counts.notificationsDeleted +
+    counts.eventsDeleted +
+    counts.applicationsShrunk +
+    counts.answersDeleted >
     0;
 
   if (changed) {
@@ -245,7 +279,7 @@ export async function runCleanup(): Promise<Counts> {
   if (changed) {
     try {
       await pool.query(
-        'VACUUM (ANALYZE) jobs, notifications, agent_applications, agent_application_documents, agent_application_events',
+        'VACUUM (ANALYZE) jobs, notifications, agent_applications, agent_application_documents, agent_application_events, applicant_answers',
       );
     } catch (err) {
       console.error('DB cleanup: vacuum failed:', err);

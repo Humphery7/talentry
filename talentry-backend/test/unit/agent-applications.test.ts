@@ -170,6 +170,19 @@ describe('agent applications service', () => {
         },
       ],
     });
+    query.mockResolvedValueOnce({
+      rows: [
+        {
+          name: 'Ada Lovelace',
+          email: 'ada@example.com',
+          phone: '+1 555 0100',
+          location: 'Lagos, Nigeria',
+          linkedinUrl: null,
+          githubUrl: null,
+          websiteUrl: null,
+        },
+      ],
+    });
 
     const result = await get('user-1', 'app-1');
 
@@ -184,6 +197,7 @@ describe('agent applications service', () => {
     ]);
     expect(result.events).toHaveLength(1);
     expect(result.screenshot).toBe('base64');
+    expect(result.candidate?.phone).toBe('+1 555 0100');
   });
 
   it('converts answer lists to the career dictionary shape', async () => {

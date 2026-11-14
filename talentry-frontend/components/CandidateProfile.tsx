@@ -222,8 +222,11 @@ function CvUpload({
       setError('Please choose a file up to 5MB.')
       return
     }
-    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-      setError('Please choose a PDF file.')
+    const name = file.name.toLowerCase()
+    const isPdf = file.type === 'application/pdf' || name.endsWith('.pdf')
+    const isDocx = name.endsWith('.docx')
+    if (!isPdf && !isDocx) {
+      setError('Please choose a PDF or DOCX file.')
       return
     }
     setBusy(true)
@@ -231,7 +234,9 @@ function CvUpload({
       const r = await fetch('/api/candidate-profile/cv', {
         method: 'PUT',
         headers: {
-          'Content-Type': 'application/pdf',
+          'Content-Type': isPdf
+            ? 'application/pdf'
+            : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           'X-Filename': encodeURIComponent(file.name),
           ...authHeaders(),
         },
@@ -279,7 +284,7 @@ function CvUpload({
           <b>{profile?.cvFilename ?? 'No CV uploaded'}</b>
           <span>{profile?.cvUpdatedAt
             ? `Updated ${new Date(profile.cvUpdatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-            : 'PDF, up to 5MB.'}</span>
+            : 'PDF or DOCX, up to 5MB.'}</span>
         </div>
         <div className="pcv-actions">
           <button type="button" className="btn pcv-btn" disabled={busy} onClick={() => input.current?.click()}>
@@ -288,7 +293,7 @@ function CvUpload({
           {profile?.cvFilename && <button type="button" className="linkbtn" onClick={download}>Download text</button>}
         </div>
       </div>
-      <input ref={input} type="file" hidden accept=".pdf" onChange={e => upload(e.target.files?.[0])} />
+      <input ref={input} type="file" hidden accept=".pdf,.docx" onChange={e => upload(e.target.files?.[0])} />
       {error && <p className="perr" role="alert">{error}</p>}
     </div>
   )
