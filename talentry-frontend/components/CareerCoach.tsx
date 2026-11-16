@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
-import { applyWithAgent } from '@/lib/applications'
+import { ApiError, applyWithAgent } from '@/lib/applications'
 import {
   listRecommendations,
   refreshRecommendations,
@@ -10,7 +10,12 @@ import {
   type Recommendations,
 } from '@/lib/recommendations'
 import { type CandidateProfile, useCandidateProfile } from './CandidateProfile'
+import KeyNotice from './KeyNotice'
 import { PageHead } from './ui'
+
+function needsKey(err: unknown): boolean {
+  return err instanceof ApiError && err.needsAiKey
+}
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong. Try again.'
@@ -121,10 +126,12 @@ export function CareerCoach() {
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [keyNeeded, setKeyNeeded] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [queued, setQueued] = useState<Set<number>>(new Set())
   const [agentBusy, setAgentBusy] = useState(false)
   const [agentError, setAgentError] = useState('')
+  const [agentKeyNeeded, setAgentKeyNeeded] = useState(false)
   const [agentNotice, setAgentNotice] = useState('')
 
   const email = user?.email
@@ -137,9 +144,11 @@ export function CareerCoach() {
     }
     setLoading(true)
     setError('')
+    setKeyNeeded(false)
     try {
       setRecs(await listRecommendations())
     } catch (err) {
+      setKeyNeeded(needsKey(err))
       setError(message(err))
     } finally {
       setLoading(false)
@@ -162,9 +171,11 @@ export function CareerCoach() {
   async function generate() {
     setBusy(true)
     setError('')
+    setKeyNeeded(false)
     try {
       setRecs(await refreshRecommendations())
     } catch (err) {
+      setKeyNeeded(needsKey(err))
       setError(message(err))
     } finally {
       setBusy(false)
@@ -203,6 +214,7 @@ export function CareerCoach() {
 
     setAgentBusy(true)
     setAgentError('')
+    setAgentKeyNeeded(false)
     setAgentNotice('')
     try {
       const result = await applyWithAgent(jobIds)
@@ -229,6 +241,7 @@ export function CareerCoach() {
         )
       }
     } catch (err) {
+      setAgentKeyNeeded(needsKey(err))
       setAgentError(message(err))
     } finally {
       setAgentBusy(false)
@@ -341,7 +354,9 @@ export function CareerCoach() {
         </p>
       </section>
 
-      {error ? (
+      {error && keyNeeded ? <KeyNotice message={error} /> : null}
+
+      {error && !keyNeeded ? (
         <section className="panel" style={{ marginBottom: 24 }}>
           <p className="perr" role="alert">{error}</p>
           <button
@@ -363,7 +378,9 @@ export function CareerCoach() {
         </section>
       ) : null}
 
-      {agentError ? (
+      {agentError && agentKeyNeeded ? <KeyNotice message={agentError} /> : null}
+
+      {agentError && !agentKeyNeeded ? (
         <section className="panel" style={{ marginBottom: 24 }}>
           <p className="perr" role="alert">{agentError}</p>
         </section>

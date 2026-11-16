@@ -75,6 +75,7 @@ AGENT_STATUSES = (
     "pending_approval",
     "approved",
     "submitting",
+    "awaiting_code",
     "submitted",
     "unconfirmed",
     "failed",
@@ -190,6 +191,17 @@ CREATE TABLE IF NOT EXISTS applicant_answers (
 )
 """
 
+# Each user's own Gemini key, encrypted by the Express backend before it is
+# stored. The worker and this service decrypt it only for that user's calls.
+CREATE_USER_AI_SETTINGS = """
+CREATE TABLE IF NOT EXISTS user_ai_settings (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  gemini_key_cipher TEXT NOT NULL,
+  key_hint TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
 CREATE_NOTIFICATIONS = """
 CREATE TABLE IF NOT EXISTS notifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -226,5 +238,6 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     conn.execute(ALTER_AGENT_APPLICATION_DOCUMENTS)
     conn.execute(CREATE_AGENT_APPLICATION_EVENTS)
     conn.execute(CREATE_APPLICANT_ANSWERS)
+    conn.execute(CREATE_USER_AI_SETTINGS)
     conn.execute(CREATE_NOTIFICATIONS)
     conn.execute(CREATE_AGENT_APPLICATION_CHILD_INDEXES)

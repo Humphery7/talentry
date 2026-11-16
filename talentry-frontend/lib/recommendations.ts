@@ -1,6 +1,6 @@
 // Types + calls for job recommendations. The browser hits Next's
 // /api/recommendations proxy, which forwards the JWT to the Express backend.
-import { authHeaders } from './auth'
+import { request } from './http'
 
 export interface Recommendation {
   jobId: number
@@ -29,30 +29,10 @@ export interface Recommendations {
   meta: RecommendationMeta
 }
 
-function errorMessage(data: unknown): string | null {
-  if (!data || typeof data !== 'object') return null
-  const message = (data as { message?: unknown }).message
-  if (Array.isArray(message)) return message.join(', ')
-  return typeof message === 'string' ? message : null
-}
-
-async function request(path: string, init?: RequestInit): Promise<Recommendations> {
-  const r = await fetch(path, {
-    ...init,
-    headers: { ...authHeaders(), ...init?.headers },
-    cache: 'no-store',
-  })
-  const data: unknown = await r.json().catch(() => null)
-  if (!r.ok) {
-    throw new Error(errorMessage(data) ?? `Request failed (${r.status}).`)
-  }
-  return data as Recommendations
-}
-
 export function listRecommendations() {
-  return request('/api/recommendations')
+  return request<Recommendations>('/api/recommendations')
 }
 
 export function refreshRecommendations() {
-  return request('/api/recommendations', { method: 'POST' })
+  return request<Recommendations>('/api/recommendations', 'POST')
 }

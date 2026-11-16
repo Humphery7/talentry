@@ -17,7 +17,7 @@ export interface AgentApplicationBatch {
 
 interface CareerAttention {
   id: string;
-  kind: 'question' | 'manual';
+  kind: 'question' | 'manual' | 'code';
   question: string;
   answer: string | null;
 }

@@ -13,6 +13,7 @@ from schemas.agent_applications import (
     StartRequest,
     StartResult,
 )
+from services import ai_keys
 from services.agent_applications import JobsNotFound, enqueue
 from services.agent_applications import store
 
@@ -84,6 +85,18 @@ def _join(items: list[str]) -> str:
 
 @router.post("", response_model=StartResult, status_code=202)
 def start(body: StartRequest, conn: ConnectionDep) -> StartResult:
+    # Auto-apply tailors documents and reads forms with Gemini. Asking for the
+    # key here is clearer than queueing a run that will fail minutes later.
+    try:
+        ai_keys.require_key(
+            conn,
+            body.user_id,
+            "Add your Gemini API key in Settings before starting an "
+            "application.",
+        )
+    except ai_keys.MissingApiKey as exc:
+        raise HTTPException(status_code=428, detail=str(exc)) from exc
+
     missing = store.missing_setup(conn, body.user_id)
     if missing:
         raise HTTPException(

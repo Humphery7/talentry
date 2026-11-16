@@ -5,7 +5,7 @@ import { loadSession } from '@/lib/auth'
 import { ApiError, call, STATUS_TEXT, type Row, type Status } from '@/lib/applications'
 
 const GROUPS: [string, Status[]][] = [
-  ['Needs your attention', ['needs_input', 'pending_approval', 'unconfirmed']],
+  ['Needs your attention', ['needs_input', 'pending_approval', 'awaiting_code', 'unconfirmed']],
   ['In progress', ['queued', 'in_progress', 'approved', 'submitting']],
   ['Done', ['submitted']],
   ['Problems', ['failed', 'cancelled']],

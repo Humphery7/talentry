@@ -37,6 +37,7 @@ export default function Header() {
             {menu && <div className="usermenu" role="menu">
               <div className="uinfo"><b>{user.name}</b><span>{user.email}</span></div>
               <Link href="/profile" role="menuitem" className="usermenu-item" onClick={() => setMenu(false)}>Profile</Link>
+              <Link href="/settings" role="menuitem" className="usermenu-item" onClick={() => setMenu(false)}>Settings</Link>
               <button type="button" role="menuitem" className="usermenu-item" onClick={async () => {
                 clearSession()
                 setMenu(false)

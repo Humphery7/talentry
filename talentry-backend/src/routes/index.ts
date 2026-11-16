@@ -1,6 +1,7 @@
 // Every URL prefix the API serves, in one place.
 import { Router } from 'express';
 import { agentApplicationsRoutes } from './agent-applications.routes.js';
+import { aiSettingsRoutes } from './ai-settings.routes.js';
 import { applicationsRoutes } from './applications.routes.js';
 import { authRoutes } from './auth.routes.js';
 import { candidateProfileRoutes } from './candidate-profile.routes.js';
@@ -20,6 +21,7 @@ routes.use('/jobs', jobsRoutes);
 routes.use('/companies', companiesRoutes);
 routes.use('/applications', applicationsRoutes);
 routes.use('/agent-applications', agentApplicationsRoutes);
+routes.use('/settings/ai', aiSettingsRoutes);
 routes.use('/notifications', notificationsRoutes);
 routes.use('/candidate-profile', candidateProfileRoutes);
 routes.use('/recommendations', recommendationsRoutes);

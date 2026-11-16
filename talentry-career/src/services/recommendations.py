@@ -6,6 +6,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from services import ai_keys
 from services.ranking import FINAL_LIMIT, rank_candidates
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ def _save(
 def refresh_recommendations(
     conn: psycopg.Connection,
     user_id: UUID | None = None,
+    api_key: str | None = None,
 ) -> int:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(PROFILES, (user_id, user_id))
@@ -178,7 +180,21 @@ def refresh_recommendations(
             _save(conn, owner, [])
             continue
 
-        ranked = rank_candidates(_build_profile_text(profile), candidates)
+        # A user-triggered refresh must fail with a prompt when the key is
+        # missing. The all-users sweep (crawler/cron) skips that user instead
+        # of failing everyone else's refresh.
+        key = api_key if user_id is not None else ai_keys.for_user(conn, owner)
+        if not key:
+            if user_id is not None:
+                raise ai_keys.MissingApiKey()
+            logger.warning(
+                "Skipping recommendations for user %s: no Gemini key.", owner
+            )
+            continue
+
+        ranked = rank_candidates(
+            _build_profile_text(profile), candidates, api_key=key
+        )
         if ranked is None:
             logger.warning("Falling back to similarity for user %s", owner)
             ranked = [_fallback(candidate) for candidate in candidates[:FINAL_LIMIT]]

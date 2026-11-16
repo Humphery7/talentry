@@ -18,6 +18,7 @@ from schemas.interview import (
     find_item,
 )
 from services import interview_store
+from services.ai_keys import MissingApiKey
 from services.gemini import generate_json
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ def _evaluate_written(
     item: Item,
     answer_text: str,
     job: dict[str, Any] | None,
+    api_key: str | None = None,
 ) -> tuple[int | None, dict[str, Any]]:
     rubric = "\n".join(
         f"- {criterion.criterion} (weight {criterion.weight}): {criterion.description}"
@@ -94,11 +96,16 @@ weaknesses and concrete improvements."""
 
     try:
         payload = generate_json(
+            api_key=api_key,
             input=prompt,
             system_instruction=SYSTEM_INSTRUCTION,
             schema=EVALUATION_SCHEMA,
         )
         result = EvaluationResult.model_validate(payload)
+    except MissingApiKey:
+        # The route turns this into a prompt to add a key; do not pretend the
+        # answer was graded.
+        raise
     except Exception as exc:  # noqa: BLE001 - the saved answer must survive
         logger.exception("Could not evaluate interview answer: %s", exc)
         return None, _feedback_error()
@@ -137,6 +144,7 @@ def evaluate_answer(
     attempt_id: UUID,
     item_id: str,
     answer: dict[str, Any],
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     attempt = interview_store.get_attempt(conn, attempt_id, user_id)
     if attempt is None:
@@ -168,7 +176,7 @@ def evaluate_answer(
                 f"text must be shorter than or equal to {MAX_RESPONSE_TEXT} characters."
             )
         job = interview_store.load_job(conn, int(attempt["job_id"]))
-        score, feedback = _evaluate_written(item, text.strip(), job)
+        score, feedback = _evaluate_written(item, text.strip(), job, api_key)
         completed = True
 
     # Close the read transaction before grading so the model call never holds

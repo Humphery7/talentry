@@ -6,6 +6,7 @@ import html
 import re
 from typing import Any
 
+from services.ai_keys import MissingApiKey
 from services.gemini import generate_json
 
 from .facts import normalize, ungrounded_numbers
@@ -256,6 +257,7 @@ def generate_cv(
     facts: dict[str, str],
     cv_text: str,
     job: dict[str, Any],
+    api_key: str | None = None,
 ) -> tuple[str, str, list[str]]:
     source = _source(cv_text, facts)
     visible = cv_text[:MAX_CV]
@@ -274,10 +276,13 @@ def generate_cv(
             )
         try:
             data = generate_json(
+                api_key=api_key,
                 input=user,
                 system_instruction=CV_SYSTEM,
                 schema=CV_SCHEMA,
             )
+        except MissingApiKey:
+            raise
         except Exception as exc:
             problems = [f"generation failed: {exc}"]
             continue
@@ -380,6 +385,7 @@ def generate_cover_letter(
     facts: dict[str, str],
     cv_text: str,
     job: dict[str, Any],
+    api_key: str | None = None,
 ) -> tuple[str, list[str]]:
     user = (
         f"{_job_prompt(job)}\n\n"
@@ -389,6 +395,7 @@ def generate_cover_letter(
     )
     letter = (
         generate_json(
+            api_key=api_key,
             input=user,
             system_instruction=LETTER_SYSTEM,
             schema=LETTER_SCHEMA,

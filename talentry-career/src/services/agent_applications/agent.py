@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from schemas.agent import (
 )
 from schemas.agent_applications import AttentionItem, PlanField
 from config.settings import settings
+from services import ai_keys
 from services.browser import BrowserSession, ToolError
 from services.browser.safety import APPLY_RE, NEXT_RE, SUBMIT_RE
 from services.gemini import generate_json
@@ -57,6 +59,8 @@ def _value_text(value: str, sensitive: bool = False) -> str:
 
 def _same_answer(expected: str, actual: str) -> bool:
     """True when the site only reformatted the value we filled in."""
+    if _same_number(expected, actual):
+        return True
     expected_words = set(facts.normalize(expected).split())
     actual_words = set(facts.normalize(actual).split())
     if not expected_words or not actual_words:
@@ -64,6 +68,85 @@ def _same_answer(expected: str, actual: str) -> bool:
     if not expected_words.issubset(actual_words):
         return False
     return len(actual) <= len(expected) * 3 + 40
+
+
+_VERIFY_CODE_RE = re.compile(
+    r"verification code|security code|one[- ]time (code|password)|"
+    r"(code|pin) (was|has been) (sent|emailed)|"
+    r"(confirm|verify) you(?:'|’)?re (a )?human",
+    re.IGNORECASE,
+)
+
+# Only a field that plainly asks for the emailed code. "Postal code" and the
+# like must not match, or a normal form would look like a challenge.
+_CODE_LABELS = {
+    "code",
+    "pin",
+    "security code",
+    "verification code",
+    "access code",
+    "one time code",
+    "one time password",
+}
+
+
+def _verification_challenge(observation: FormObservation) -> bool:
+    """True when the page is waiting for a code sent to the candidate's email.
+
+    The agent cannot read email, so this is a hand-off, not a submission. The
+    code field is sometimes inside an iframe the inspector cannot see, so the
+    page text alone is enough to detect the challenge.
+    """
+    texts = [observation.text or "", observation.title or ""]
+    texts.extend(field.label or "" for field in observation.fields)
+    return any(_VERIFY_CODE_RE.search(text) for text in texts if text)
+
+
+def _code_field(observation: FormObservation) -> FormField | None:
+    """The input that takes the emailed code, if the page shows one."""
+    for field in observation.fields:
+        if field.kind not in {"text", "tel", "number", "password", "search"}:
+            continue
+        label = facts.normalize(field.label)
+        if label in _CODE_LABELS or any(
+            wanted in label for wanted in ("verification code", "security code")
+        ):
+            return field
+    return None
+
+
+_RESEND_RE = re.compile(
+    r"resend|send (a )?new|get (a )?new|e-?mail (me )?(a )?new", re.IGNORECASE
+)
+
+
+def _code_submit_button(observation: FormObservation) -> FormButton | None:
+    """The button that submits the code (usually “Submit application”)."""
+    buttons = [
+        button
+        for button in observation.buttons
+        if button.kind == "button"
+        and not _RESEND_RE.search(button.text or "")
+    ]
+    for button in buttons:
+        if button.is_submit or SUBMIT_RE.search(button.text or ""):
+            return button
+    return buttons[0] if len(buttons) == 1 else None
+
+
+def _same_number(expected: str, actual: str) -> bool:
+    """Same digits, different punctuation: “+2349065637151” vs “+234 906 563 7151”.
+
+    Sites reformat phone numbers and thousands separators on blur. That is not
+    a changed answer, so submit must not stop for it.
+    """
+    if not expected or not actual:
+        return False
+    if re.search(r"[^\W\d_]", expected + actual):
+        return False  # letters mean this is not a number
+    left = re.sub(r"\D", "", expected)
+    right = re.sub(r"\D", "", actual)
+    return bool(left) and left == right
 
 
 DECIDE_SYSTEM = """You fill one job application form for a candidate.
@@ -219,6 +302,20 @@ class Agent:
     @property
     def application_id(self) -> UUID | str:
         return self.app["id"]
+
+    @property
+    def api_key(self) -> str:
+        """The user's own Gemini key, fetched once per run."""
+        key = getattr(self, "_api_key", None)
+        if key is None:
+            key = ai_keys.require_key(
+                self.conn,
+                self.app["user_id"],
+                "Add your Gemini API key in Settings, then start this "
+                "application again.",
+            )
+            self._api_key = key
+        return key
 
     def log(
         self,
@@ -423,7 +520,11 @@ class Agent:
             else:
                 try:
                     tailored = docx_cv.tailor(
-                        bytes(template), self.facts, self.cv_text, self.job
+                        bytes(template),
+                        self.facts,
+                        self.cv_text,
+                        self.job,
+                        self.api_key,
                     )
                     return (
                         tailored.content,
@@ -432,13 +533,15 @@ class Agent:
                         tailored.pdf,
                         tailored.pages,
                     )
+                except ai_keys.MissingApiKey:
+                    raise
                 except Exception as exc:
                     self.warn(
                         "Could not reuse your own CV layout "
                         f"({exc}); used the standard layout instead."
                     )
         content, origin, notes = documents.generate_cv(
-            self.facts, self.cv_text, self.job
+            self.facts, self.cv_text, self.job, self.api_key
         )
         return content, origin, notes, None, None
 
@@ -473,7 +576,7 @@ class Agent:
         ):
             try:
                 content, notes = documents.generate_cover_letter(
-                    self.facts, self.cv_text, self.job
+                    self.facts, self.cv_text, self.job, self.api_key
                 )
                 store.add_doc(
                     self.conn,
@@ -486,6 +589,8 @@ class Agent:
                 for note in notes:
                     self.warn(note)
                 self.log("document", "Prepared cover letter.")
+            except ai_keys.MissingApiKey:
+                raise
             except Exception as exc:
                 self.warn(f"Could not prepare a cover letter: {exc}")
 
@@ -673,7 +778,12 @@ class Agent:
             return facts.normalize(field.value) == facts.normalize(
                 entry.value
             )
-        return facts.normalize(field.value) == facts.normalize(entry.value)
+        if facts.normalize(field.value) == facts.normalize(entry.value):
+            return True
+        # A phone number, salary or year the site only reformatted is the same
+        # answer. Without this, submit stops on “+2349065637151” vs
+        # “+234 906 563 7151” even though nothing actually changed.
+        return _same_number(entry.value, field.value)
 
     def adopt_site_value(self, field: FormField, entry: PlanField) -> bool:
         """Keep a value the site only reformatted instead of failing."""
@@ -902,6 +1012,7 @@ class Agent:
             "feedback": self.feedback,
         }
         out = generate_json(
+            api_key=self.api_key,
             input=json.dumps(payload, ensure_ascii=False),
             system_instruction=DECIDE_SYSTEM,
             schema=DECIDE_SCHEMA,
@@ -1429,67 +1540,287 @@ class Agent:
             raise ActionError(result.message)
         return await self.read_outcome()
 
-    async def read_outcome(self) -> str:
-        for _ in range(12):
-            await asyncio.sleep(1.2)
-            inspection = await self.tools.inspect_page()
-            observation = build_observation(inspection)
-            screenshot = base64.b64encode(
-                await self.session.screenshot_jpeg()
-            ).decode("ascii")
+    async def _look(self) -> tuple[FormObservation, str]:
+        """Inspect the page and grab the screenshot the user will see."""
+        inspection = await self.tools.inspect_page()
+        observation = build_observation(inspection)
+        screenshot = base64.b64encode(
+            await self.session.screenshot_jpeg()
+        ).decode("ascii")
+        return observation, screenshot
 
-            if observation.signals.confirmation and not observation.fields:
-                self.checkpoint()
-                store.finish(
-                    self.conn,
-                    self.application_id,
-                    "submitted",
-                    submitted_at=datetime.now(timezone.utc),
-                    result={
-                        "outcome": "confirmed",
-                        "url": observation.url,
-                    },
-                    screenshot=screenshot,
-                    error=None,
-                )
-                self.log("submitted", "The employer confirmed the application.")
+    def _record_submitted(
+        self, observation: FormObservation, screenshot: str
+    ) -> bool:
+        """Store a confirmed submission. Checked before any challenge text."""
+        if not (observation.signals.confirmation and not observation.fields):
+            return False
+        self.checkpoint()
+        store.finish(
+            self.conn,
+            self.application_id,
+            "submitted",
+            submitted_at=datetime.now(timezone.utc),
+            result={
+                "outcome": "confirmed",
+                "url": observation.url,
+            },
+            screenshot=screenshot,
+            attention=[],
+            error=None,
+        )
+        self.log("submitted", "The employer confirmed the application.")
+        return True
+
+    def _record_rejected(
+        self, observation: FormObservation, screenshot: str
+    ) -> bool:
+        """Store a submission the employer refused, so the user can review."""
+        if not (observation.errors and observation.fields):
+            return False
+        for message in observation.errors[:5]:
+            self.warn(message)
+        store.finish(
+            self.conn,
+            self.application_id,
+            "pending_approval",
+            approved_snapshot=None,
+            approved_at=None,
+            warnings=self.warnings,
+            result={
+                "outcome": "rejected",
+                "errors": observation.errors,
+            },
+            screenshot=screenshot,
+            attention=[],
+            error=None,
+        )
+        self.log(
+            "rejected",
+            "The employer rejected the submission; review the errors.",
+        )
+        return True
+
+    def _hand_off_code(
+        self, observation: FormObservation, screenshot: str
+    ) -> str:
+        """The page asks for a code but shows no box to type it into."""
+        wants_code = bool(
+            re.search(r"\bcode\b|\bpin\b", observation.text or "", re.I)
+        )
+        error = (
+            "The employer wants a security code from your email before it "
+            "accepts this application. Open the employer’s page, enter the "
+            "code, finish submitting, then click “It went through” here."
+            if wants_code
+            else "The employer’s page is waiting on a human check that "
+            "Talentry cannot complete on its own. Open the employer’s page, "
+            "finish it, then click “It went through” here."
+        )
+        store.finish(
+            self.conn,
+            self.application_id,
+            "unconfirmed",
+            result={"outcome": "verification_code", "url": observation.url},
+            screenshot=screenshot,
+            attention=[],
+            error=error,
+        )
+        self.log(
+            "unconfirmed",
+            "The employer asked for a verification check Talentry cannot do.",
+        )
+        return "unconfirmed"
+
+    async def read_outcome(
+        self, *, allow_code: bool = True, polls: int = 12
+    ) -> str:
+        last: FormObservation | None = None
+        for _ in range(polls):
+            await asyncio.sleep(1.2)
+            observation, screenshot = await self._look()
+            last = observation
+            if self._record_submitted(observation, screenshot):
                 return "submitted"
 
-            if observation.errors and observation.fields:
-                for message in observation.errors[:5]:
-                    self.warn(message)
-                store.finish(
-                    self.conn,
-                    self.application_id,
-                    "pending_approval",
-                    approved_snapshot=None,
-                    approved_at=None,
-                    warnings=self.warnings,
-                    result={
-                        "outcome": "rejected",
-                        "errors": observation.errors,
-                    },
-                    screenshot=screenshot,
-                    error=None,
-                )
-                self.log(
-                    "rejected",
-                    "The employer rejected the submission; review the errors.",
-                )
+            if _verification_challenge(observation):
+                if not allow_code:
+                    # Called again after a code was entered: still asking
+                    # means the code was not accepted.
+                    return "challenge"
+                if _code_field(observation) is None:
+                    return self._hand_off_code(observation, screenshot)
+                return await self.enter_code(screenshot)
+
+            if self._record_rejected(observation, screenshot):
                 return "pending_approval"
 
         screenshot = base64.b64encode(
             await self.session.screenshot_jpeg()
         ).decode("ascii")
+        # The loop ran out. What the last page showed decides the message:
+        # a form still on screen means nothing was accepted, while a page with
+        # no form probably went through but gave no receipt.
+        if last is not None and last.fields:
+            error = (
+                "The employer’s site did not accept the submission — the "
+                "form is still on screen. Open the employer’s page and "
+                "submit it there, then click “It went through” here."
+            )
+        else:
+            error = (
+                "The page changed after submit, so this probably went "
+                "through, but the employer showed no confirmation. Check "
+                "your email for a receipt; if it arrived, click “It went "
+                "through” here, otherwise click “It didn’t, try again”."
+            )
         store.finish(
             self.conn,
             self.application_id,
             "unconfirmed",
-            error=(
-                "The application was submitted, but I could not confirm it. "
-                "Check the employer site before trying again."
-            ),
+            result={
+                "outcome": (
+                    "form_still_present"
+                    if last is not None and last.fields
+                    else "no_confirmation"
+                ),
+                "url": last.url if last is not None else None,
+            },
+            error=error,
             screenshot=screenshot,
+            attention=[],
         )
-        self.log("unconfirmed", "Submission could not be confirmed.")
+        self.log("unconfirmed", error[:120])
         return "unconfirmed"
+
+    async def enter_code(self, screenshot: str) -> str:
+        """Keep the filled page open and submit it once the user pastes the code.
+
+        This is the one place the worker deliberately blocks: the employer's
+        page has the completed application in it, and closing the browser would
+        throw that away. The code only works in this page, so the page waits.
+        """
+        why = (
+            "The employer emailed a one-time code. Talentry is holding the "
+            "page open — paste the code here and it will submit for you."
+        )
+        item = next(
+            (entry for entry in self.attention if entry.kind == "code"), None
+        )
+        if item is None:
+            item = AttentionItem(
+                id=uuid4().hex[:12],
+                kind="code",
+                question="Security code",
+                why=why,
+                sensitive=True,
+            )
+            self.attention.append(item)
+        else:
+            item.answer = None
+            item.why = why
+
+        store.hold_for_code(
+            self.conn,
+            self.application_id,
+            {
+                "fields": {
+                    key: value.model_dump()
+                    for key, value in self.fields.items()
+                }
+            },
+            [entry.model_dump() for entry in self.attention],
+            screenshot,
+        )
+        self.log("code", "Waiting for the security code the employer emailed.")
+        try:
+            store.notify(
+                self.conn,
+                self.app,
+                "awaiting_code",
+                "Security code needed",
+                "The employer emailed a code. Enter it in Talentry to finish "
+                "submitting this application.",
+            )
+        except psycopg.Error:
+            pass
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + settings.AGENT_CODE_WAIT_SECONDS
+        touched = loop.time()
+        while loop.time() < deadline:
+            await asyncio.sleep(settings.AGENT_CODE_POLL_SECONDS)
+            now = loop.time()
+            if now - touched >= 20:
+                store.touch(self.conn, self.application_id)
+                touched = now
+            state = store.code_state(self.conn, self.application_id)
+            if state is None or state.get("status") == "cancelled":
+                raise store.Cancelled()
+            if state.get("status") != "awaiting_code":
+                # Something else ended the application; stop holding.
+                return str(state.get("status") or "unconfirmed")
+            code = next(
+                (
+                    str(entry.get("answer")).strip()
+                    for entry in state.get("attention") or []
+                    if entry.get("kind") == "code" and entry.get("answer")
+                ),
+                None,
+            )
+            if code is None:
+                continue
+            outcome = await self._submit_code(code)
+            if outcome is None:
+                store.code_rejected(
+                    self.conn,
+                    self.application_id,
+                    "That code was not accepted. Use the newest code from the "
+                    "employer’s email, or ask the employer to resend it.",
+                )
+                item.answer = None
+                continue
+            return outcome
+
+        screenshot = base64.b64encode(
+            await self.session.screenshot_jpeg()
+        ).decode("ascii")
+        error = (
+            "Talentry waited for the security code but none was entered in "
+            "time, so nothing was submitted and the employer’s page was "
+            "closed. Open the employer’s page, fill the form again using "
+            "“Copy my details”, then submit it there."
+        )
+        store.finish(
+            self.conn,
+            self.application_id,
+            "unconfirmed",
+            result={"outcome": "code_timeout"},
+            error=error,
+            screenshot=screenshot,
+            attention=[],
+        )
+        self.log("unconfirmed", error[:120])
+        return "unconfirmed"
+
+    async def _submit_code(self, code: str) -> str | None:
+        """Type the code into the held page and click submit.
+
+        Returns the finished status, or None when the site did not accept the
+        code and the user should be asked again.
+        """
+        observation, _ = await self._look()
+        field = _code_field(observation)
+        button = _code_submit_button(observation)
+        if field is None or button is None:
+            return None
+        filled = await self.tools.fill_field(field.element_id, code)
+        if not filled.ok:
+            return None
+        await self.tools.allow_submit()
+        clicked = await self.tools.click_element(button.element_id)
+        if not clicked.ok:
+            return None
+        self.log("code", "Entered the security code and clicked submit.")
+        outcome = await self.read_outcome(allow_code=False)
+        return None if outcome == "challenge" else outcome

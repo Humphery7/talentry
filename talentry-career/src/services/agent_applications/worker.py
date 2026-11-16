@@ -11,6 +11,7 @@ import psycopg
 
 from config.settings import get_database_url, settings
 from db.schema import ensure_schema
+from services import ai_keys
 from services.browser import BrowserSession
 
 from . import store
@@ -195,6 +196,8 @@ class Worker:
             )
         except store.Cancelled:
             log.info("Application %s was changed by the user.", application_id)
+        except ai_keys.MissingApiKey as exc:
+            await self.missing_key(conn, agent, application, exc)
         except ActionError as exc:
             await self.failed(conn, agent, application, exc)
         except Exception as exc:
@@ -300,6 +303,33 @@ class Worker:
             message,
         )
         self.notify(conn, application, "unconfirmed")
+
+    async def missing_key(
+        self,
+        conn: psycopg.Connection,
+        agent: Agent | None,
+        application: dict[str, Any],
+        exc: Exception,
+    ) -> None:
+        """Stop without retrying: a missing key is setup, not a flaky page."""
+        if agent is not None and agent.clicked_submit:
+            await self.unconfirmed(conn, application, explain(exc))
+            return
+        message = (
+            f"{explain(exc)} Add your Gemini API key, then click “Try again”."
+        )
+        store.finish(
+            conn,
+            application["id"],
+            "failed",
+            approved_snapshot=None,
+            approved_at=None,
+            error=message,
+        )
+        if agent is not None:
+            agent.log("manual", message)
+        self.notify(conn, application, "failed")
+        log.info("Application %s is missing a Gemini key.", application["id"])
 
     async def failed(
         self,

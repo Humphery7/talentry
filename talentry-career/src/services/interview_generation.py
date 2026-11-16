@@ -365,13 +365,18 @@ def normalize_payload(payload: Any) -> dict[str, Any]:
     return data
 
 
-def _generate_valid_assessment(job: dict[str, Any], profile: dict[str, Any] | None) -> Assessment:
+def _generate_valid_assessment(
+    job: dict[str, Any],
+    profile: dict[str, Any] | None,
+    api_key: str | None = None,
+) -> Assessment:
     prompt = build_generation_prompt(job, profile)
     last_error: Exception | None = None
 
     for attempt in range(2):
         try:
             payload = generate_json(
+                api_key=api_key,
                 input=prompt,
                 system_instruction=SYSTEM_INSTRUCTION,
                 schema=GENERATION_SCHEMA,
@@ -392,6 +397,7 @@ def generate_assessment(
     user_id: UUID,
     job_id: int,
     new_attempt: bool,
+    api_key: str | None = None,
 ) -> tuple[UUID, bool]:
     """Return (attempt_id, created). Reuses the latest attempt unless asked for a new one."""
     lock_key = f"interview:{user_id}:{job_id}"
@@ -410,7 +416,7 @@ def generate_assessment(
         profile = interview_store.load_profile(conn, user_id)
         conn.commit()
 
-        assessment = _generate_valid_assessment(job, profile)
+        assessment = _generate_valid_assessment(job, profile, api_key)
         internal = assessment.model_dump(mode="json")
         public = public_assessment(assessment)
         progress = compute_progress(assessment, [])

@@ -86,7 +86,7 @@ def test_generate_reuses_the_latest_attempt_by_default(monkeypatch) -> None:
     generated = []
     monkeypatch.setattr(
         "services.interview_generation._generate_valid_assessment",
-        lambda job, profile: generated.append(True),
+        lambda job, profile, api_key: generated.append(True),
     )
 
     attempt_id, created = generate_assessment(
@@ -111,7 +111,7 @@ def test_first_attempt_is_created_without_superseding(monkeypatch) -> None:
     monkeypatch.setattr(interview_store, "load_profile", lambda conn, user_id: None)
     monkeypatch.setattr(
         "services.interview_generation._generate_valid_assessment",
-        lambda job, profile: assessment,
+        lambda job, profile, api_key: assessment,
     )
     superseded: list[bool] = []
     monkeypatch.setattr(
@@ -153,7 +153,7 @@ def test_new_attempt_supersedes_and_saves(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "services.interview_generation._generate_valid_assessment",
-        lambda job, profile: assessment,
+        lambda job, profile, api_key: assessment,
     )
     superseded: list[bool] = []
     monkeypatch.setattr(

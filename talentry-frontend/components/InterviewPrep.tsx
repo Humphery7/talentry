@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { loadSession } from '@/lib/auth'
+import { ApiError } from '@/lib/http'
+import KeyNotice from './KeyNotice'
 import {
   type AnswerResult,
   type FeedbackShape,
@@ -16,6 +18,10 @@ import {
   startInterview,
   submitInterviewAnswer,
 } from '@/lib/interview'
+
+function needsKey(err: unknown): boolean {
+  return err instanceof ApiError && err.needsAiKey
+}
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong. Try again.'
@@ -62,6 +68,7 @@ export default function InterviewPrep() {
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+  const [keyNeeded, setKeyNeeded] = useState(false)
   const [busyItem, setBusyItem] = useState<string | null>(null)
 
   useEffect(() => {
@@ -80,6 +87,7 @@ export default function InterviewPrep() {
     }
 
     setError('')
+    setKeyNeeded(false)
     setLoading(true)
     setGenerating(true)
     try {
@@ -87,6 +95,7 @@ export default function InterviewPrep() {
       setAttempt(current)
       setAttempts((await listInterviews(jobId)).data)
     } catch (err) {
+      setKeyNeeded(needsKey(err))
       setError(message(err))
     } finally {
       setLoading(false)
@@ -104,11 +113,13 @@ export default function InterviewPrep() {
 
   async function newAttempt() {
     setError('')
+    setKeyNeeded(false)
     setGenerating(true)
     try {
       setAttempt(await startInterview(jobId, true))
       await refreshList()
     } catch (err) {
+      setKeyNeeded(needsKey(err))
       setError(message(err))
     } finally {
       setGenerating(false)
@@ -118,10 +129,12 @@ export default function InterviewPrep() {
   async function openAttempt(id: string) {
     if (id === attempt?.id) return
     setError('')
+    setKeyNeeded(false)
     setLoading(true)
     try {
       setAttempt(await getInterview(id))
     } catch (err) {
+      setKeyNeeded(needsKey(err))
       setError(message(err))
     } finally {
       setLoading(false)
@@ -131,11 +144,13 @@ export default function InterviewPrep() {
   async function answer(item: InterviewItem, value: InterviewAnswer) {
     if (!attempt) return
     setError('')
+    setKeyNeeded(false)
     setBusyItem(item.id)
     try {
       const result = await submitInterviewAnswer(attempt.id, item.id, value)
       setAttempt(prev => (prev ? applyAnswer(prev, item.id, value, result) : prev))
     } catch (err) {
+      setKeyNeeded(needsKey(err))
       setError(message(err))
     } finally {
       setBusyItem(null)
@@ -169,11 +184,15 @@ export default function InterviewPrep() {
 
   if (error && !attempt) {
     return (
-      <div className="panel">
-        <h2>Could not load interview prep</h2>
-        <p className="m" style={{ margin: '10px 0 20px' }}>{error}</p>
-        <button className="btn" onClick={() => void load()}>Try again</button>
-      </div>
+      <>
+        {keyNeeded ? <KeyNotice message={error} /> : (
+          <div className="panel">
+            <h2>Could not load interview prep</h2>
+            <p className="m" style={{ margin: '10px 0 20px' }}>{error}</p>
+            <button className="btn" onClick={() => void load()}>Try again</button>
+          </div>
+        )}
+      </>
     )
   }
 
@@ -244,7 +263,8 @@ export default function InterviewPrep() {
             Start new attempt
           </button>
         </div>
-        {error ? <p className="iv-error">{error}</p> : null}
+        {error && keyNeeded ? <KeyNotice message={error} /> : null}
+        {error && !keyNeeded ? <p className="iv-error">{error}</p> : null}
       </section>
 
       {attempt.assessment.sections.map(section => {

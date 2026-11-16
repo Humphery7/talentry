@@ -1,5 +1,8 @@
 'use client'
 import { authHeaders } from './auth'
+import { request } from './http'
+
+export { ApiError } from './http'
 
 export type Status =
   | 'queued'
@@ -8,6 +11,7 @@ export type Status =
   | 'pending_approval'
   | 'approved'
   | 'submitting'
+  | 'awaiting_code'
   | 'submitted'
   | 'unconfirmed'
   | 'failed'
@@ -15,7 +19,7 @@ export type Status =
 
 export interface Attention {
   id: string
-  kind: 'question' | 'manual'
+  kind: 'question' | 'manual' | 'code'
   question: string
   label?: string | null
   why?: string | null
@@ -83,7 +87,11 @@ export interface Detail {
   fields: Field[]
   documents: { cv?: DocumentGroup; cover_letter?: DocumentGroup }
   events: ApplicationEvent[]
-  result: { confirmation?: string; manual?: boolean } | null
+  result: {
+    confirmation?: string
+    manual?: boolean
+    outcome?: string
+  } | null
   screenshot: string | null
   candidate?: CandidateCard | null
   updatedAt: string
@@ -116,38 +124,14 @@ export const STATUS_TEXT: Record<Status, [string, string]> = {
   pending_approval: ['Ready for review', 'Check everything, then approve to submit.'],
   approved: ['Submitting soon', 'Approved. Talentry is about to submit.'],
   submitting: ['Submitting', 'Sending the application now.'],
+  awaiting_code: ['Waiting for code', 'Talentry is holding the employer’s page open with your answers in it, while you enter the code they emailed.'],
   submitted: ['Submitted', 'The application was sent.'],
-  unconfirmed: ['Check this one', 'We clicked submit but could not confirm it.'],
+  unconfirmed: ['Check this one', 'Submission needs a quick check. The panel below says what to do.'],
   failed: ['Stopped', 'It could not finish. Your answers are kept, so Try again resumes.'],
   cancelled: ['Cancelled', 'You cancelled this application.'],
 }
 
-export const WORKING: Status[] = ['queued', 'in_progress', 'approved', 'submitting']
-
-export class ApiError extends Error {
-  constructor(public messages: string[]) {
-    super(messages.join(' '))
-  }
-}
-
-async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const r = await fetch(path, {
-    method,
-    headers: {
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      ...authHeaders(),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    cache: 'no-store',
-  })
-  const data: unknown = await r.json().catch(() => null)
-  if (!r.ok) {
-    const payload = data as { message?: unknown; error?: unknown } | null
-    const raw = payload?.message ?? payload?.error ?? `Request failed (${r.status}).`
-    throw new ApiError(Array.isArray(raw) ? raw.map(String) : [String(raw)])
-  }
-  return data as T
-}
+export const WORKING: Status[] = ['queued', 'in_progress', 'approved', 'submitting', 'awaiting_code']
 
 export function call<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   return request<T>(`/api/agent-applications${path}`, method, body)

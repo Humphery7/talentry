@@ -16,6 +16,7 @@ from .facts import classify, normalize
 ACTIVE_STATUSES = (
     AgentApplicationStatus.in_progress.value,
     AgentApplicationStatus.submitting.value,
+    AgentApplicationStatus.awaiting_code.value,
 )
 
 
@@ -108,6 +109,21 @@ def recover_stale(conn: psycopg.Connection, minutes: int) -> None:
             completed_at = now(),
             updated_at = now()
         WHERE status = 'submitting'
+          AND heartbeat_at < now() - make_interval(mins => %s)
+        """,
+        (minutes,),
+    )
+    conn.execute(
+        """
+        UPDATE agent_applications
+        SET status = 'unconfirmed',
+            error = 'The worker restarted while waiting for the security code, '
+                    'so nothing was submitted. Open the employer site, fill the '
+                    'form again and submit it there.',
+            attention = '[]'::jsonb,
+            completed_at = now(),
+            updated_at = now()
+        WHERE status = 'awaiting_code'
           AND heartbeat_at < now() - make_interval(mins => %s)
         """,
         (minutes,),
@@ -236,6 +252,87 @@ def refresh_attention(
         )
         row = cur.fetchone()
     return list((row or {}).get("attention") or [])
+
+
+def hold_for_code(
+    conn: psycopg.Connection,
+    application_id: str | UUID,
+    plan: dict[str, Any],
+    attention: list[dict[str, Any]],
+    screenshot: str | None = None,
+) -> None:
+    """Park a submitted application while the worker keeps its page open.
+
+    The status change is the handshake with the UI: it shows a code box only
+    while this row says `awaiting_code`. The existing plan is stored too so a
+    crash still leaves the answers reviewable.
+    """
+    cur = conn.execute(
+        """
+        UPDATE agent_applications
+        SET status = 'awaiting_code',
+            plan = %s,
+            attention = %s,
+            screenshot = COALESCE(%s, screenshot),
+            error = NULL,
+            heartbeat_at = now(),
+            updated_at = now()
+        WHERE id = %s AND status = 'submitting'
+        """,
+        (Jsonb(plan), Jsonb(attention), screenshot, application_id),
+    )
+    if cur.rowcount == 0:
+        raise Cancelled()
+
+
+def touch(conn: psycopg.Connection, application_id: str | UUID) -> None:
+    """Keep a held application from looking abandoned to the stale sweep."""
+    cur = conn.execute(
+        """
+        UPDATE agent_applications
+        SET heartbeat_at = now(), updated_at = now()
+        WHERE id = %s AND status = 'awaiting_code'
+        """,
+        (application_id,),
+    )
+    if cur.rowcount == 0:
+        raise Cancelled()
+
+
+def code_state(
+    conn: psycopg.Connection,
+    application_id: str | UUID,
+) -> dict[str, Any] | None:
+    """The current status and attention, read fresh while waiting for a code."""
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT status, attention FROM agent_applications WHERE id = %s",
+            (application_id,),
+        )
+        return cur.fetchone()
+
+
+def code_rejected(
+    conn: psycopg.Connection,
+    application_id: str | UUID,
+    why: str,
+) -> None:
+    """Clear the used code so the UI asks again, with the reason shown."""
+    attention = refresh_attention(conn, application_id)
+    for item in attention:
+        if item.get("kind") == "code":
+            item["answer"] = None
+            item["why"] = why
+    conn.execute(
+        """
+        UPDATE agent_applications
+        SET attention = %s,
+            heartbeat_at = now(),
+            updated_at = now()
+        WHERE id = %s AND status = 'awaiting_code'
+        """,
+        (Jsonb(attention), application_id),
+    )
 
 
 def finish(
@@ -535,7 +632,9 @@ def answer(
     row = get_for_user(conn, application_id, user_id)
     if row is None:
         raise NotFound()
-    if row["status"] != AgentApplicationStatus.needs_input.value:
+    status = row["status"]
+    awaiting_code = status == AgentApplicationStatus.awaiting_code.value
+    if status != AgentApplicationStatus.needs_input.value and not awaiting_code:
         raise InvalidState("This application is not waiting for answers.")
 
     attention = list(row.get("attention") or [])
@@ -548,12 +647,17 @@ def answer(
     for attention_id, value in answers.items():
         item = by_id.get(attention_id)
         text = value.strip()
-        if (
-            item is None
-            or item.get("kind") != "question"
-            or item.get("answer") is not None
-            or not text
-        ):
+        if item is None or item.get("answer") is not None or not text:
+            continue
+        if item.get("kind") == "code":
+            # A one-time code is only accepted while the worker is holding the
+            # page open. It is never written to the answer bank.
+            if not awaiting_code:
+                continue
+            item["answer"] = text
+            answered += 1
+            continue
+        if item.get("kind") != "question" or status != "needs_input":
             continue
         item["answer"] = text
         answered += 1
@@ -581,6 +685,28 @@ def answer(
 
     if answered == 0:
         raise InvalidState("No unanswered items matched.")
+
+    if awaiting_code:
+        # Keep the status: the same worker is polling this row and still owns
+        # the open employer page. Only the answer changes.
+        conn.execute(
+            """
+            UPDATE agent_applications
+            SET attention = %s,
+                error = NULL,
+                heartbeat_at = now(),
+                updated_at = now()
+            WHERE id = %s AND user_id = %s AND status = 'awaiting_code'
+            """,
+            (Jsonb(attention), application_id, user_id),
+        )
+        event(
+            conn,
+            application_id,
+            "code",
+            "Security code received.",
+        )
+        return answered
 
     conn.execute(
         """
@@ -756,6 +882,10 @@ def cancel(
         """
         UPDATE agent_applications
         SET status = 'cancelled',
+            attention = CASE
+              WHEN status = 'awaiting_code' THEN '[]'::jsonb
+              ELSE attention
+            END,
             completed_at = now(),
             updated_at = now()
         WHERE id = %s AND user_id = %s

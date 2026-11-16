@@ -6,6 +6,7 @@ from typing import Any
 from google import genai
 
 from config.settings import settings
+from services.ai_keys import MissingApiKey
 
 logger = logging.getLogger(__name__)
 
@@ -89,16 +90,8 @@ def build_prompt(profile_text: str, candidates: list[dict[str, Any]]) -> str:
     )
 
 
-_client_instance: genai.Client | None = None
-
-
-def _client() -> genai.Client:
-    global _client_instance
-    if _client_instance is None:
-        if not settings.GEMINI_API_KEY:
-            raise RuntimeError("GEMINI_API_KEY is not set in talentry-career/.env")
-        _client_instance = genai.Client(api_key=settings.GEMINI_API_KEY)
-    return _client_instance
+def _client(api_key: str) -> genai.Client:
+    return genai.Client(api_key=api_key)
 
 
 def _normalize(
@@ -139,13 +132,18 @@ def _normalize(
 
 
 def rank_candidates(
-    profile_text: str, candidates: list[dict[str, Any]]
+    profile_text: str,
+    candidates: list[dict[str, Any]],
+    api_key: str | None = None,
 ) -> list[dict[str, Any]] | None:
     if not candidates:
         return []
 
+    if not api_key:
+        raise MissingApiKey()
+
     try:
-        interaction = _client().interactions.create(
+        interaction = _client(api_key).interactions.create(
             model=settings.GEMINI_MODEL,
             input=build_prompt(profile_text, candidates),
             system_instruction=SYSTEM_INSTRUCTION,

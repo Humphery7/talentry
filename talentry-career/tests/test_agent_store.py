@@ -160,3 +160,47 @@ def test_document_pdf_is_none_when_no_file_is_stored():
         )
         is None
     )
+
+
+def code_row(status: str) -> dict:
+    return {
+        "status": status,
+        "attention": [
+            {
+                "id": "code",
+                "kind": "code",
+                "question": "Security code",
+                "answer": None,
+            }
+        ],
+    }
+
+
+def test_code_answer_keeps_the_page_held_and_is_never_banked():
+    row = code_row("awaiting_code")
+    conn = FakeConn(row)
+
+    answered = store.answer(
+        conn, UUID(int=1), UUID(int=2), {"code": "12345678"}
+    )
+
+    assert answered == 1
+    assert row["attention"][0]["answer"] == "12345678"
+    # The worker is polling this row with its browser still open, so the
+    # status must not change to 'queued'.
+    assert any(
+        "AND status = 'awaiting_code'" in sql for sql, _ in conn.calls
+    )
+    # A one-time code must never reach the answer bank.
+    assert not any(
+        "INSERT INTO applicant_answers" in sql for sql, _ in conn.calls
+    )
+
+
+def test_code_answer_is_refused_when_no_page_is_being_held():
+    import pytest
+
+    conn = FakeConn(code_row("needs_input"))
+
+    with pytest.raises(store.InvalidState):
+        store.answer(conn, UUID(int=1), UUID(int=2), {"code": "12345678"})

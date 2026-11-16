@@ -21,6 +21,7 @@ from docx import Document
 from docx.oxml.ns import qn
 from pypdf import PdfReader
 
+from services.ai_keys import MissingApiKey
 from services.gemini import generate_json
 
 from .documents import far_languages
@@ -293,6 +294,7 @@ def _generate(
     job: dict[str, Any],
     slots: list[Slot],
     source: str,
+    api_key: str | None = None,
 ) -> tuple[dict[int, str], list[str], list[str]]:
     """Return (edits, model notes, problems with the rewrites that were skipped)."""
     prompt = _prompt(facts, cv_text, job, slots)
@@ -308,10 +310,13 @@ def _generate(
             )
         try:
             data = generate_json(
+                api_key=api_key,
                 input=user,
                 system_instruction=EDIT_SYSTEM,
                 schema=EDIT_SCHEMA,
             )
+        except MissingApiKey:
+            raise
         except Exception as exc:
             problems = [f"generation failed: {exc}"]
             continue
@@ -333,6 +338,7 @@ def tailor(
     facts: dict[str, str],
     cv_text: str,
     job: dict[str, Any],
+    api_key: str | None = None,
 ) -> Tailored:
     """Rewrite bullets/skills in the uploaded CV and return it as a PDF."""
     _soffice()  # fail before spending a generation call
@@ -342,7 +348,9 @@ def tailor(
         raise TemplateError("no editable bullets or skill lines were found")
 
     source = cv_text + "\n" + "\n".join(facts.values())
-    edits, notes, problems = _generate(facts, cv_text, job, slots, source)
+    edits, notes, problems = _generate(
+        facts, cv_text, job, slots, source, api_key
+    )
 
     # The template already fits; every rewrite must keep it that way.
     budget = page_count(to_pdf(template))

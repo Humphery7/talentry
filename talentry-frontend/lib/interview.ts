@@ -1,6 +1,6 @@
 // Types + calls for job-specific interview prep. The browser hits Next's
 // /api/interview proxy, which forwards the JWT to the Express backend.
-import { authHeaders } from './auth'
+import { request } from './http'
 
 export interface SectionProgress {
   id: string
@@ -121,34 +121,10 @@ export interface AnswerResult {
   progress: InterviewProgress
 }
 
-function errorMessage(data: unknown): string | null {
-  if (!data || typeof data !== 'object') return null
-  const message = (data as { message?: unknown }).message
-  if (Array.isArray(message)) return message.join(', ')
-  return typeof message === 'string' ? message : null
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...authHeaders(),
-      ...init?.headers,
-    },
-    cache: 'no-store',
-  })
-  const data: unknown = await r.json().catch(() => null)
-  if (!r.ok) {
-    throw new Error(errorMessage(data) ?? `Request failed (${r.status}).`)
-  }
-  return data as T
-}
-
 export function startInterview(jobId: number, newAttempt = false) {
-  return request<InterviewAttempt>('/api/interview/attempts', {
-    method: 'POST',
-    body: JSON.stringify({ jobId, newAttempt }),
+  return request<InterviewAttempt>('/api/interview/attempts', 'POST', {
+    jobId,
+    newAttempt,
   })
 }
 
@@ -169,7 +145,8 @@ export function submitInterviewAnswer(
 ) {
   return request<AnswerResult>(
     `/api/interview/attempts/${attemptId}/responses/${encodeURIComponent(itemId)}`,
-    { method: 'PUT', body: JSON.stringify(answer) },
+    'PUT',
+    answer,
   )
 }
 

@@ -204,14 +204,24 @@ pip install -r requirements-dev.txt
 
 # talentry-career/.env
 # DATABASE_URL="postgresql://USER:PASSWORD@HOST/neondb?sslmode=require"
-# GEMINI_API_KEY="..."
+# AI_KEY_SECRET="..."   # must match talentry-backend/.env
 
 uvicorn app:app --app-dir src --reload --port 8100
 ```
 
 The backend calls this service for profile embeddings, recommendations,
-interview prep, and every auto-apply action. It needs `GEMINI_API_KEY`; without
-it the AI features do not work.
+interview prep, and every auto-apply action. AI calls use **the signed-in
+user's own Gemini key**, which they add under **Settings** in the app. There is
+no shared server key: if a user has not saved one, the feature answers with a
+prompt that links straight to Settings, and auto-apply will not queue.
+
+Keys are encrypted with AES-256-GCM before they are stored, are never returned
+to the browser (only a masked hint like `••••1234`), and are only decrypted for
+that user's own requests. `AI_KEY_SECRET` is the encryption secret and must be
+the same in the backend and career service. Generate one with
+`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Set
+it before deploying; changing it makes saved keys unreadable, so users simply
+re-enter them.
 
 The career service can start the auto-apply worker for you. If you run it
 through `uvicorn` directly, that is the default (`AGENT_WORKER_ENABLED=1`). If
@@ -251,7 +261,8 @@ layout instead of the one in your uploaded DOCX.
 
 The worker opens the employer's page in a real browser, fills what it can from
 your profile and CV, and pauses for you to answer missing questions or approve
-the submission. It cannot solve CAPTCHAs: when one blocks submission, the
+the submission. It uses your own Gemini key for tailoring and form decisions,
+so add one under **Settings** before starting an application. It cannot solve CAPTCHAs: when one blocks submission, the
 application pauses with an **Action needed** note, and you finish it on the
 employer's site. The application page has a **Copy my details** button and a
 **Download PDF** button for exactly that handoff.
@@ -274,6 +285,16 @@ job to the next.
 If a run fails, the application page says why in one sentence. **Try again**
 resumes the same application with the same answers; nothing is asked twice and
 nothing already filled is lost.
+
+If the employer asks for an emailed security code, Talentry keeps that exact
+page open with everything already filled in and shows a code box on the
+application page. Enter the code and the worker types it into the held page and
+submits. The code is never written to the answer bank, and cancelling or letting
+the window expire closes the page without submitting. The wait is capped by
+`AGENT_CODE_WAIT_SECONDS` (default 180s); while one worker is holding a page it
+cannot start another application, so keep the cap short. If the code never
+arrives, the application ends as **Check this one** with instructions to finish
+it on the employer's site.
 
 Upload a **DOCX** CV in your profile if you want the tailored CV to keep your
 own layout — fonts, margins, bullets and dates stay as you designed them.
@@ -304,8 +325,8 @@ handlers, so the browser never needs the API URL directly. Override it with
 | `OIDC_ISSUER` | backend | no | `https://accounts.google.com` |
 | `REDIRECT_URL` | backend | no | `http://localhost:3001/auth/google/callback` — must match the Google console. |
 | `FRONTEND_URL` | backend | no | `http://localhost:3000` |
-| `GEMINI_API_KEY` | career | yes for AI features | Recommendations, interview prep, CV tailoring, cover letters. |
-| `GEMINI_MODEL` | career | no | `gemini-3.5-flash-lite` |
+| `AI_KEY_SECRET` | backend, career | yes in production | Encrypts each user's saved Gemini key. Must match in both services. Development falls back to an insecure default. |
+| `GEMINI_MODEL` | career | no | `gemini-3.5-flash-lite` (the model used with each user's key) |
 | `PLAYWRIGHT_CHANNEL` | career | no | Set to `chrome` on macOS 13. |
 | `PLAYWRIGHT_HEADLESS` | career | no | `true` |
 | `PLAYWRIGHT_TIMEOUT_MS` | career | no | `30000` |

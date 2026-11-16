@@ -18,7 +18,9 @@ class Settings(BaseSettings):
 
     app_name: str = "talentry-career 0.1v"
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"
-    GEMINI_API_KEY: str | None = None
+    # Encrypts each user's own Gemini key at rest. Must match the backend's
+    # AI_KEY_SECRET; changing it makes saved keys unreadable (users re-enter).
+    AI_KEY_SECRET: str | None = None
     PLAYWRIGHT_CHANNEL: str | None = None
     PLAYWRIGHT_HEADLESS: bool = True
     PLAYWRIGHT_TIMEOUT_MS: int = 30_000
@@ -27,6 +29,10 @@ class Settings(BaseSettings):
     AGENT_MAX_ATTEMPTS: int = 3
     AGENT_POLL_SECONDS: float = 5.0
     AGENT_STALE_MINUTES: int = 5
+    # How long one worker may hold an employer page open waiting for the code
+    # the site emailed. The worker is busy for this long, so keep it short.
+    AGENT_CODE_WAIT_SECONDS: int = 180
+    AGENT_CODE_POLL_SECONDS: float = 2.0
 
 
 settings = Settings()

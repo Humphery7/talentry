@@ -19,6 +19,7 @@ class AgentApplicationStatus(str, Enum):
     pending_approval = "pending_approval"
     approved = "approved"
     submitting = "submitting"
+    awaiting_code = "awaiting_code"
     submitted = "submitted"
     unconfirmed = "unconfirmed"
     failed = "failed"
@@ -44,7 +45,7 @@ class StartResult(BaseModel):
 
 class AttentionItem(BaseModel):
     id: str
-    kind: Literal["question", "manual"]
+    kind: Literal["question", "manual", "code"]
     field_key: str | None = None
     # The form label, kept so an answer can be matched to the same question
     # even when the site generates a different internal field id.

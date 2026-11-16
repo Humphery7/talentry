@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { loadSession } from '@/lib/auth'
-import { ApiError, call, documentPdf, STATUS_TEXT, WORKING, type Detail, type Field } from '@/lib/applications'
+import { ApiError, call, documentPdf, STATUS_TEXT, WORKING, type Attention, type Detail, type Field } from '@/lib/applications'
 
 const SOURCE: Record<string, string> = {
   profile: 'From your profile',
@@ -60,6 +60,7 @@ export default function ApplicationDetail({ id }: { id: string }) {
   const open = data.attention.filter(item => item.answer === null)
   const questions = open.filter(item => item.kind === 'question')
   const manual = open.filter(item => item.kind === 'manual')
+  const codeItem = open.find(item => item.kind === 'code')
   const filled = data.fields.filter(field => field.status !== 'skipped')
   const blank = data.fields.filter(field => field.status === 'skipped')
   const editable = EDITABLE.includes(data.status)
@@ -77,7 +78,7 @@ export default function ApplicationDetail({ id }: { id: string }) {
         <p style={{ margin: '16px 0 0' }}>
           <span className="chip" aria-live="polite">{label}</span> <span className="m">{hint}</span>
         </p>
-        {data.error && <p role="alert" className="m" style={{ marginTop: 10 }}>{data.error}</p>}
+        {data.error && data.status !== 'unconfirmed' && <p role="alert" className="m" style={{ marginTop: 10 }}>{data.error}</p>}
         {error && <p role="alert" style={{ marginTop: 10, color: 'var(--err, #c0392b)' }}>{error}</p>}
         {data.result?.confirmation && <p className="m" style={{ marginTop: 10 }}>Employer message: “{data.result.confirmation}”</p>}
         {data.result?.manual && <p className="m" style={{ marginTop: 10 }}>You submitted this yourself.</p>}
@@ -107,10 +108,30 @@ export default function ApplicationDetail({ id }: { id: string }) {
             {[data.documents.cv ? 'tailored CV' : '', coverLetter ? 'cover letter' : '']
               .filter(Boolean)
               .join(' and ') || 'no documents'}{' '}
-            attached. Nothing is sent until you click <b>Approve &amp; submit</b> at the
-            bottom of this page.
+            attached. Nothing is sent until you click <b>Approve &amp; submit</b>.
           </p>
         </div>
+      )}
+
+      {data.status === 'awaiting_code' && codeItem && (
+        <CodePrompt
+          item={codeItem}
+          busy={busy}
+          onSend={(code) => act('/answers', 'POST', { answers: { [codeItem.id]: code } })}
+        />
+      )}
+
+      {data.status === 'awaiting_code' && !codeItem && (
+        <div className="panel" role="status" style={{ marginTop: 16 }}>
+          <b>Checking the code…</b>
+          <p className="m" style={{ margin: '6px 0 0' }}>
+            Talentry is entering it on the employer’s page. This usually takes a few seconds.
+          </p>
+        </div>
+      )}
+
+      {data.status === 'unconfirmed' && (
+        <Unconfirmed data={data} busy={busy} act={act} />
       )}
 
       {questions.length > 0 && (
@@ -127,15 +148,38 @@ export default function ApplicationDetail({ id }: { id: string }) {
           <p style={{ margin: '8px 0' }}>{item.question}</p>
           {item.why && <p className="m">{item.why}</p>}
           <p className="m" style={{ margin: '8px 0 16px' }}>
-            Talentry cannot do this step in its own browser. Finish it on the employer’s site,
-            then click “I’ve sorted it, retry” — it picks up where it stopped and keeps every
-            answer you already gave.
+            {data.status === 'needs_input'
+              ? 'Talentry cannot do this step in its own browser. Finish it on the employer’s site, then click “I’ve sorted it, retry” — it picks up where it stopped and keeps every answer you already gave.'
+              : data.status === 'pending_approval'
+                ? 'Talentry stopped before sending anything, so nothing has been submitted. Review the details below, then click “Approve & submit” — it fills the form again from these answers.'
+                : data.status === 'failed'
+                  ? 'Talentry stopped before finishing and nothing was submitted. Your answers are kept — click “Try again” to pick up where it stopped.'
+                  : 'Open the employer’s page to finish this step. If it has already gone through there, click “It went through”.'}
             {filled.length > 0 && ' Use “Copy my details” below so you do not retype anything.'}
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
             {employerUrl && <a className="btn" style={{ width: 'auto', padding: '0 24px', textDecoration: 'none' }} href={employerUrl} target="_blank" rel="noreferrer">Open employer’s page</a>}
-            <button className="btn" style={{ width: 'auto', padding: '0 24px' }} disabled={busy || questions.length > 0} onClick={() => void act('/resume')}>I’ve sorted it, retry</button>
-            <button className="btn" style={{ width: 'auto', padding: '0 24px' }} disabled={busy} onClick={() => void act('/manual-complete', 'POST', {}, 'Mark this as submitted? Only do this if you really submitted it yourself.')}>I submitted it myself</button>
+            {data.status === 'needs_input' && (
+              <button className="btn" style={{ width: 'auto', padding: '0 24px' }} disabled={busy || questions.length > 0} onClick={() => void act('/resume')}>I’ve sorted it, retry</button>
+            )}
+            {data.status === 'pending_approval' && (
+              <button className="btn" style={{ width: 'auto', padding: '0 24px' }} disabled={busy || questions.length > 0}
+                onClick={() => void act('/approve', 'POST', {}, `Submit this application to ${data.company ?? 'the employer'}? They will receive exactly what is shown here. This cannot be undone.`)}>
+                Approve &amp; submit
+              </button>
+            )}
+            {data.status === 'failed' && (
+              <button className="btn" style={{ width: 'auto', padding: '0 24px' }} disabled={busy} onClick={() => void act('/retry')}>Try again</button>
+            )}
+            {data.status === 'unconfirmed' && (
+              <button className="btn" style={{ width: 'auto', padding: '0 24px' }} disabled={busy}
+                onClick={() => void act('/manual-complete', 'POST', {}, 'Mark as submitted? Only if you checked it went through.')}>
+                It went through
+              </button>
+            )}
+            {['needs_input', 'pending_approval', 'failed'].includes(data.status) && (
+              <button className="btn" style={{ width: 'auto', padding: '0 24px' }} disabled={busy} onClick={() => void act('/manual-complete', 'POST', {}, 'Mark this as submitted? Only do this if you really submitted it yourself.')}>I submitted it myself</button>
+            )}
           </div>
         </div>
       ))}
@@ -219,16 +263,7 @@ export default function ApplicationDetail({ id }: { id: string }) {
         {['failed', 'cancelled'].includes(data.status) && (
           <button className="btn" style={{ width: 'auto', padding: '0 28px' }} disabled={busy} onClick={() => void act('/retry')}>Try again</button>
         )}
-        {data.status === 'unconfirmed' && (
-          <>
-            <button className="btn" style={{ width: 'auto', padding: '0 28px' }} disabled={busy} onClick={() => void act('/manual-complete', 'POST', {}, 'Mark as submitted? Only if you checked it went through.')}>It went through</button>
-            <button className="btn" style={{ width: 'auto', padding: '0 28px' }} disabled={busy}
-              onClick={() => void act('/retry', 'POST', { confirmNotSubmitted: true }, 'Confirm you checked your email and the employer site and the application was NOT submitted?')}>
-              It didn’t, try again
-            </button>
-          </>
-        )}
-        {['queued', 'in_progress', 'needs_input', 'pending_approval', 'approved'].includes(data.status) && (
+        {['queued', 'in_progress', 'needs_input', 'pending_approval', 'approved', 'awaiting_code'].includes(data.status) && (
           <button className="chip" disabled={busy} onClick={() => void act('/cancel', 'POST', {}, 'Cancel this application?')}>Cancel</button>
         )}
       </div>
@@ -243,6 +278,117 @@ export default function ApplicationDetail({ id }: { id: string }) {
           ))}
         </ul>
       </details>
+    </div>
+  )
+}
+
+function CodePrompt({ item, busy, onSend }: {
+  item: Attention
+  busy: boolean
+  onSend: (code: string) => Promise<boolean>
+}) {
+  const [code, setCode] = useState('')
+  const [sending, setSending] = useState(false)
+  const blocked = busy || sending
+  return (
+    <div className="panel" role="status" style={{ marginTop: 16 }}>
+      <b>{item.question}</b>
+      <p style={{ margin: '8px 0' }}>
+        {item.why ?? 'The employer emailed a one-time code.'}
+      </p>
+      <p className="m" style={{ margin: '0 0 12px' }}>
+        Everything is already filled in on the employer’s page — paste the code and Talentry
+        will submit it for you. If the code is not entered within a few minutes the page is
+        closed and you can apply yourself instead.
+      </p>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault()
+          const value = code.trim()
+          if (!value || blocked) return
+          setSending(true)
+          void onSend(value).then((ok) => {
+            setSending(false)
+            if (ok) setCode('')
+          })
+        }}
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}
+      >
+        <input
+          className="f"
+          style={{ maxWidth: 280 }}
+          value={code}
+          disabled={blocked}
+          onChange={(event) => setCode(event.target.value)}
+          placeholder="Code from your email"
+          aria-label="Security code"
+          autoComplete="one-time-code"
+          autoFocus
+        />
+        <button className="btn" type="submit" style={{ width: 'auto', padding: '0 24px' }} disabled={blocked || !code.trim()}>
+          Submit code
+        </button>
+      </form>
+    </div>
+  )
+}
+
+function Unconfirmed({ data, busy, act }: {
+  data: Detail
+  busy: boolean
+  act: (path: string, method?: string, body?: unknown, confirmText?: string) => Promise<boolean>
+}) {
+  const outcome = data.result?.outcome
+  const code = outcome === 'verification_code'
+  const stillOpen = outcome === 'form_still_present'
+  const title = code
+    ? 'One step left: the employer’s security code'
+    : stillOpen
+      ? 'This one was not submitted'
+      : 'Check whether this one went through'
+  return (
+    <div className="panel" role="status" style={{ marginTop: 16 }}>
+      <b>{title}</b>
+      <p style={{ margin: '8px 0' }}>
+        {data.error ?? 'Talentry could not tell what happened after the submit click.'}
+      </p>
+      <ol className="m" style={{ margin: '0 0 16px', paddingLeft: 20, display: 'grid', gap: 4 }}>
+        {code ? (
+          <>
+            <li>Open the employer’s page below.</li>
+            <li>Enter the code they emailed you, then finish submitting.</li>
+            <li>Once the employer confirms it, click “It went through”.</li>
+          </>
+        ) : stillOpen ? (
+          <>
+            <li>Open the employer’s page and submit the form there.</li>
+            <li>When it confirms, click “It went through”.</li>
+            <li>To let Talentry try again instead, click “It didn’t, try again”.</li>
+          </>
+        ) : (
+          <>
+            <li>Check your email and the employer’s site for a confirmation.</li>
+            <li>If you find one, click “It went through”.</li>
+            <li>If there is none, click “It didn’t, try again”.</li>
+          </>
+        )}
+      </ol>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+        {data.applyUrl && (
+          <a className="btn" style={{ width: 'auto', padding: '0 24px', textDecoration: 'none' }} href={data.applyUrl} target="_blank" rel="noreferrer">Open employer’s page</a>
+        )}
+        <button className="btn" style={{ width: 'auto', padding: '0 24px' }} disabled={busy}
+          onClick={() => void act('/manual-complete', 'POST', {}, 'Mark as submitted? Only if you checked it went through.')}>
+          It went through
+        </button>
+        <button className="chip" disabled={busy}
+          onClick={() => void act('/retry', 'POST', { confirmNotSubmitted: true }, 'Confirm you checked your email and the employer site and the application was NOT submitted?')}>
+          It didn’t, try again
+        </button>
+      </div>
+      <p className="m" style={{ margin: '12px 0 0' }}>
+        Retrying keeps every answer you already gave, so nothing will be asked twice.
+      </p>
     </div>
   )
 }

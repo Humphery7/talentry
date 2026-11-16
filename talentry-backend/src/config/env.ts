@@ -18,11 +18,21 @@ if (!process.env.SESSION_SECRET) {
   );
 }
 
+if (!process.env.AI_KEY_SECRET) {
+  console.warn(
+    'AI_KEY_SECRET is not set - saved Gemini keys use an insecure development default. Set it before deploying.',
+  );
+}
+
 export const env = {
   port: Number(process.env.PORT ?? 3001),
   databaseUrl,
   jwtSecret: process.env.JWT_SECRET ?? 'dev-secret-change-me',
   sessionSecret: process.env.SESSION_SECRET ?? 'dev-session-secret-change-me',
+  // Encrypts each user's own Gemini key at rest. Must match the career
+  // service's AI_KEY_SECRET. The development default is not safe in
+  // production: set a real value there.
+  aiKeySecret: process.env.AI_KEY_SECRET ?? 'dev-secret-change-me',
   // Internal Python service that generates and grades interview prep.
   careerUrl: (process.env.CAREER_API_URL ?? 'http://localhost:8100').replace(
     /\/$/,

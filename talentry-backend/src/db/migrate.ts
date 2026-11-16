@@ -160,8 +160,8 @@ export async function runMigrations() {
       status TEXT NOT NULL DEFAULT 'queued'
         CHECK (status IN (
           'queued', 'in_progress', 'needs_input', 'pending_approval',
-          'approved', 'submitting', 'submitted', 'unconfirmed', 'failed',
-          'cancelled'
+          'approved', 'submitting', 'awaiting_code', 'submitted',
+          'unconfirmed', 'failed', 'cancelled'
         )),
       platform TEXT,
       apply_url TEXT,
@@ -185,6 +185,16 @@ export async function runMigrations() {
       completed_at TIMESTAMPTZ,
       UNIQUE (batch_id, job_id)
     );
+    -- Existing tables keep the old check constraint, so replace it.
+    ALTER TABLE agent_applications
+      DROP CONSTRAINT IF EXISTS agent_applications_status_check;
+    ALTER TABLE agent_applications
+      ADD CONSTRAINT agent_applications_status_check
+      CHECK (status IN (
+        'queued', 'in_progress', 'needs_input', 'pending_approval',
+        'approved', 'submitting', 'awaiting_code', 'submitted',
+        'unconfirmed', 'failed', 'cancelled'
+      ));
     CREATE INDEX IF NOT EXISTS idx_agent_applications_status
       ON agent_applications (status, created_at);
     CREATE INDEX IF NOT EXISTS idx_agent_applications_user
@@ -228,6 +238,15 @@ export async function runMigrations() {
       answer TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (user_id, question_key)
+    );
+
+    -- Each user's own Gemini key. Encrypted by ai-settings.service.ts; the
+    -- career worker decrypts it only for that user's AI calls.
+    CREATE TABLE IF NOT EXISTS user_ai_settings (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      gemini_key_cipher TEXT NOT NULL,
+      key_hint TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS notifications (

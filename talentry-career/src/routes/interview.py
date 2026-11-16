@@ -15,6 +15,7 @@ from schemas.interview_api import (
     GenerateRequest,
     GenerateResult,
 )
+from services import ai_keys
 from services.interview_evaluation import (
     AttemptNotFound,
     InvalidAnswer,
@@ -33,12 +34,16 @@ router = APIRouter(prefix="/interview", tags=["interview"])
 @router.post("/generate", response_model=GenerateResult)
 def generate(body: GenerateRequest, conn: ConnectionDep) -> GenerateResult:
     try:
+        api_key = ai_keys.require_key(conn, body.user_id)
         attempt_id, created = generate_assessment(
             conn,
             user_id=body.user_id,
             job_id=body.job_id,
             new_attempt=body.new_attempt,
+            api_key=api_key,
         )
+    except ai_keys.MissingApiKey as exc:
+        raise HTTPException(status_code=428, detail=str(exc)) from exc
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GenerationError as exc:
@@ -50,13 +55,19 @@ def generate(body: GenerateRequest, conn: ConnectionDep) -> GenerateResult:
 @router.post("/evaluate", response_model=AnswerResult)
 def evaluate(body: AnswerRequest, conn: ConnectionDep) -> AnswerResult:
     try:
+        # Only written answers call Gemini. Passing the key softly keeps
+        # multiple-choice and practice answers working without one.
+        api_key = ai_keys.for_user(conn, body.user_id)
         result = evaluate_answer(
             conn,
             user_id=body.user_id,
             attempt_id=body.attempt_id,
             item_id=body.item_id,
             answer=body.answer,
+            api_key=api_key,
         )
+    except ai_keys.MissingApiKey as exc:
+        raise HTTPException(status_code=428, detail=str(exc)) from exc
     except AttemptNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ItemNotFound as exc:
