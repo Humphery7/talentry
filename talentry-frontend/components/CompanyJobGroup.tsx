@@ -4,7 +4,8 @@ import Link from 'next/link'
 import { memo, type CSSProperties } from 'react'
 import type { CompanyGroup } from '@/lib/data'
 import { useSaved } from '@/lib/useSaved'
-import { CompanyLogo, Icon, Verified } from './ui'
+import CompanyLogo from './CompanyLogo'
+import { Icon, Verified } from './ui'
 
 /* ────────────────────────────────────────────────────────
  * CompanyJobGroup
@@ -33,7 +34,7 @@ export default memo(function CompanyJobGroup({
     >
       {/* ── Company header ── */}
       <div className="cg-header">
-        <CompanyLogo job={{ bg: group.bg, ch: group.ch }} />
+        <CompanyLogo job={{ bg: group.bg, ch: group.ch, logo: group.logo }} />
 
         <div className="cg-info">
           <h2 className="cg-name">

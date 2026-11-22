@@ -278,13 +278,26 @@ function CvUpload({
 
   return (
     <div className="pcv">
+      {!profile?.cvFilename && (
+        <div className="pcv-formats">
+          <p>
+            <b>DOCX — recommended.</b> Keeps your own fonts, margins, bullets and page
+            count when Talentry tailors it for a job.
+          </p>
+          <p>
+            <b>PDF.</b> Keeps the text only. Talentry rebuilds it in its own clean
+            layout, so your original design is lost.
+          </p>
+        </div>
+      )}
+
       <div className="pcv-row">
         <span className="pcv-icon">CV</span>
         <div className="pcv-info">
           <b>{profile?.cvFilename ?? 'No CV uploaded'}</b>
           <span>{profile?.cvUpdatedAt
             ? `Updated ${new Date(profile.cvUpdatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-            : 'PDF or DOCX, up to 5MB.'}</span>
+            : 'Required for auto-apply · PDF or DOCX, up to 5MB.'}</span>
         </div>
         <div className="pcv-actions">
           <button type="button" className="btn pcv-btn" disabled={busy} onClick={() => input.current?.click()}>
@@ -294,6 +307,14 @@ function CvUpload({
         </div>
       </div>
       <input ref={input} type="file" hidden accept=".pdf,.docx" onChange={e => upload(e.target.files?.[0])} />
+
+      {profile?.cvFilename && (
+        <p className="m pcv-hint">
+          Replacing with a DOCX keeps your layout. Replacing with a PDF keeps only the
+          text and switches the tailored CV to Talentry’s layout.
+        </p>
+      )}
+
       {error && <p className="perr" role="alert">{error}</p>}
     </div>
   )
@@ -357,7 +378,7 @@ export function ProfilePrompt() {
       onCancel={e => { e.preventDefault(); skip() }}
     >
       <h2 id="profile-title">Complete your profile</h2>
-      <p>A few details help us match you with the right roles. This is optional — you can fill it in later from your account menu.</p>
+      <p>Your CV is what Talentry needs to apply for you. A few details help us match you with the right roles, and you can add or change them later from your account menu.</p>
       <ProfileForm
         initial={profile}
         onSaved={saved => {

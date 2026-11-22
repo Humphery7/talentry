@@ -5,7 +5,7 @@ import sanitizeHtml from 'sanitize-html'
 import { getJob } from '@/lib/api'
 import ApplyButton from '@/components/ApplyButton'
 import AutoApplyButton from '@/components/AutoApplyButton'
-import { CompanyLogo } from '@/components/ui'
+import CompanyLogo from '@/components/CompanyLogo'
 type P = { params: Promise<{ id: string }> }
 
 const DESCRIPTION_TAGS = [

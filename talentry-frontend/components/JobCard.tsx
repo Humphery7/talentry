@@ -3,7 +3,8 @@ import Link from 'next/link'
 import { memo, type CSSProperties } from 'react'
 import type { Job } from '@/lib/data'
 import { useSaved } from '@/lib/useSaved'
-import { CompanyLogo, Icon, Verified } from './ui'
+import CompanyLogo from './CompanyLogo'
+import { Icon, Verified } from './ui'
 export default memo(function JobCard({ job, i }: { job: Job; i: number }) {
   const { ids, toggle } = useSaved()
   return (
