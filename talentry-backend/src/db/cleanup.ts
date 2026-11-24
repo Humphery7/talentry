@@ -36,9 +36,36 @@ const SENSITIVE_QUESTION = [
 const RUN_EVERY_MS = 24 * 60 * 60 * 1000;
 const FIRST_RUN_MS = 2 * 60 * 1000;
 
+// ---- keeping the `jobs` table from growing without bound ----------------
+//
+// Deleting rows does not shrink a Postgres table: the space is only marked
+// reusable inside the file, and Neon bills the file. The crawler also rewrites
+// last_seen_at for every job it sees, which leaves a dead row version behind
+// each time. So the table is rewritten (VACUUM FULL) once bloat is worth the
+// lock. That is the only operation that hands the space back to Neon.
+//
+// There is deliberately no content-based dedupe: boards routinely publish
+// different requisitions with the same title and boilerplate description
+// (Accenture, for example, had 55 distinct job ids under one title), so
+// matching on text deletes real jobs. The crawler already upserts by URL.
+const JOBS_INDEX = 'idx_jobs_embedding';
+const JOBS_INDEX_SQL =
+  'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_embedding ' +
+  'ON jobs USING hnsw (embedding vector_cosine_ops)';
+// Rewrite only when the table is this much bigger than it should be, and at
+// most this often (a rewrite locks `jobs` for a minute or two).
+const REWRITE_MIN_GROWTH = 96 * 1024 * 1024;
+const REWRITE_GROWTH_RATIO = 1.35;
+const REWRITE_MIN_INTERVAL_MS = 6 * 24 * 60 * 60 * 1000;
+// The free space Neon gives this project, and the slack kept for other tables.
+const STORAGE_LIMIT_BYTES =
+  Number(process.env.DB_STORAGE_LIMIT_MB ?? 1000) * 1024 * 1024;
+const REWRITE_HEADROOM_BYTES = 32 * 1024 * 1024;
+
 interface Counts {
   jobsSlimmed: number;
   jobsDeleted: number;
+  jobsRewritten: number;
   applicationsDeleted: number;
   documentsDeleted: number;
   applicationsCleared: number;
@@ -56,6 +83,7 @@ export async function runCleanup(): Promise<Counts> {
   const counts: Counts = {
     jobsSlimmed: 0,
     jobsDeleted: 0,
+    jobsRewritten: 0,
     applicationsDeleted: 0,
     documentsDeleted: 0,
     applicationsCleared: 0,
@@ -219,6 +247,83 @@ export async function runCleanup(): Promise<Counts> {
     counts.jobsSlimmed = rowCount ?? 0;
   });
 
+  // Give the space from deleted and rewritten rows back to Neon. This is the
+  // only step that shrinks the database file; a plain VACUUM only reuses space
+  // internally.
+  await step('jobs: reclaim bloat', counts, async () => {
+    const size = await pool.query<{ bytes: string; rows: string }>(
+      `SELECT pg_total_relation_size('jobs')::text AS bytes,
+              (SELECT count(*) FROM jobs)::text AS rows`,
+    );
+    const sizeBytes = Number(size.rows[0]?.bytes ?? 0);
+    const rows = Number(size.rows[0]?.rows ?? 0);
+    if (!rows) return;
+
+    const state = await readMaintenanceState();
+    const last = state.get('jobs_rewrite_at');
+    const baselineBytes = Number(state.get('jobs_rewrite_bytes') ?? 0) || null;
+    const baselineRows = Number(state.get('jobs_rewrite_rows') ?? 0) || null;
+    if (
+      !shouldRewriteJobs({
+        sizeBytes,
+        rows,
+        baselineBytes,
+        baselineRows,
+        lastRewriteAt: last ? new Date(last) : null,
+      })
+    ) {
+      return;
+    }
+
+    let droppedIndex = false;
+    let rewritten = false;
+    try {
+      if (!rewriteFits(await databaseBytes(), sizeBytes)) {
+        // A rewrite needs room for the compact copy while the old one still
+        // exists. The embedding index is the largest thing we can free, and it
+        // is rebuilt straight after.
+        console.log(
+          'DB cleanup: freeing the embedding index to make room for the rewrite.',
+        );
+        await pool.query(`DROP INDEX IF EXISTS ${JOBS_INDEX}`);
+        droppedIndex = true;
+      }
+      if (!rewriteFits(await databaseBytes(), sizeBytes)) {
+        console.warn(
+          'DB cleanup: not enough free space to rewrite jobs; skipping this run.',
+        );
+        return;
+      }
+
+      // Keep the lock short. If a reader holds the table, try again tomorrow
+      // rather than queueing every request behind the rewrite.
+      const client = await pool.connect();
+      try {
+        await client.query(`SET lock_timeout = '20s'`);
+        await client.query('VACUUM (FULL, ANALYZE) jobs');
+      } finally {
+        client.release();
+      }
+      counts.jobsRewritten = 1;
+      rewritten = true;
+    } finally {
+      if (droppedIndex) await ensureJobsIndex();
+    }
+
+    // Record the baseline only once the index is back, so the next comparison
+    // is like for like (otherwise the rebuilt index looks like fresh bloat).
+    if (rewritten) {
+      const compact = await pool.query<{ bytes: string }>(
+        `SELECT pg_total_relation_size('jobs')::text AS bytes`,
+      );
+      await writeMaintenanceState({
+        jobs_rewrite_at: new Date().toISOString(),
+        jobs_rewrite_bytes: String(Number(compact.rows[0]?.bytes ?? sizeBytes)),
+        jobs_rewrite_rows: String(rows),
+      });
+    }
+  });
+
   await step('notifications: delete old read items', counts, async () => {
     const { rowCount } = await pool.query(
       `DELETE FROM notifications
@@ -261,6 +366,7 @@ export async function runCleanup(): Promise<Counts> {
   const changed =
     counts.jobsSlimmed +
     counts.jobsDeleted +
+    counts.jobsRewritten +
     counts.applicationsDeleted +
     counts.documentsDeleted +
     counts.applicationsCleared +
@@ -287,6 +393,128 @@ export async function runCleanup(): Promise<Counts> {
   }
 
   return counts;
+}
+
+// ---- bloat bookkeeping --------------------------------------------------
+
+export interface RewriteCheck {
+  sizeBytes: number;
+  rows: number;
+  /** Size and row count right after the last rewrite, if there was one. */
+  baselineBytes: number | null;
+  baselineRows: number | null;
+  lastRewriteAt: Date | null;
+}
+
+/**
+ * Whether rewriting `jobs` is likely to give back real space.
+ *
+ * Growth is measured per row, so simply crawling more jobs never looks like
+ * bloat. The first run has no baseline and rewrites any table big enough to
+ * plausibly hold dead space; afterwards the interval and the per-row growth
+ * test keep a rewrite rare.
+ */
+export function shouldRewriteJobs(check: RewriteCheck): boolean {
+  const { sizeBytes, rows, baselineBytes, baselineRows, lastRewriteAt } = check;
+  if (rows <= 0 || sizeBytes <= 0) return false;
+
+  if (lastRewriteAt) {
+    const age = Date.now() - lastRewriteAt.getTime();
+    // A bad timestamp means "unknown", which must not block a needed rewrite.
+    if (Number.isFinite(age) && age < REWRITE_MIN_INTERVAL_MS) return false;
+  }
+
+  if (!baselineBytes || !baselineRows) {
+    return sizeBytes >= REWRITE_MIN_GROWTH;
+  }
+
+  const expectedBytes = baselineBytes * (rows / baselineRows);
+  const growth = sizeBytes - expectedBytes;
+  return (
+    growth >= REWRITE_MIN_GROWTH &&
+    sizeBytes >= expectedBytes * REWRITE_GROWTH_RATIO
+  );
+}
+
+/**
+ * A rewrite needs room for the compact copy while the old table still exists,
+ * or the write fails and Neon reports a storage limit error. The copy is
+ * assumed to be a little over half the current table (live rows compress
+ * well); the rest is slack for WAL and the other tables.
+ */
+export function rewriteFits(
+  databaseBytes: number,
+  tableBytes: number,
+): boolean {
+  if (databaseBytes <= 0 || tableBytes <= 0) return false;
+  const copyBytes = Math.round(tableBytes * 0.55);
+  return (
+    databaseBytes + copyBytes + REWRITE_HEADROOM_BYTES <= STORAGE_LIMIT_BYTES
+  );
+}
+
+async function readMaintenanceState(): Promise<Map<string, string>> {
+  try {
+    const { rows } = await pool.query<{ key: string; value: string }>(
+      'SELECT key, value FROM maintenance_state',
+    );
+    return new Map(rows.map((r) => [r.key, r.value]));
+  } catch (err) {
+    // The migration may not have run yet; treat that as "no history".
+    console.error('DB cleanup: could not read maintenance state:', err);
+    return new Map();
+  }
+}
+
+async function writeMaintenanceState(
+  values: Record<string, string>,
+): Promise<void> {
+  const keys = Object.keys(values);
+  try {
+    await pool.query(
+      `INSERT INTO maintenance_state (key, value, updated_at)
+       SELECT k, v, now() FROM unnest($1::text[], $2::text[]) AS t(k, v)
+       ON CONFLICT (key)
+       DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [keys, keys.map((k) => values[k])],
+    );
+  } catch (err) {
+    console.error('DB cleanup: could not write maintenance state:', err);
+  }
+}
+
+async function databaseBytes(): Promise<number> {
+  try {
+    const { rows } = await pool.query<{ bytes: string }>(
+      `SELECT pg_database_size(current_database())::text AS bytes`,
+    );
+    return Number(rows[0]?.bytes ?? 0);
+  } catch (err) {
+    console.error('DB cleanup: could not measure database size:', err);
+    return 0;
+  }
+}
+
+/**
+ * Rebuild the vector index after it was dropped to make room. The career
+ * service can still match without it, only more slowly, so a failure here is
+ * logged rather than thrown.
+ */
+async function ensureJobsIndex(): Promise<void> {
+  try {
+    const { rows } = await pool.query<{ present: boolean }>(
+      `SELECT to_regclass($1) IS NOT NULL AS present`,
+      [JOBS_INDEX],
+    );
+    if (rows[0]?.present) return;
+    console.log('DB cleanup: rebuilding the jobs embedding index.');
+    await pool.query(JOBS_INDEX_SQL);
+  } catch (err) {
+    console.error(
+      'DB cleanup: could not rebuild the jobs embedding index:',
+      err,
+    );
+  }
 }
 
 async function isCrawlerActive(): Promise<boolean> {

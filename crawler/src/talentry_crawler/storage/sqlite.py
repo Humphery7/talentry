@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from talentry_crawler.config.paths import OUTPUT_DIR
-from talentry_crawler.models import Board, Company, Job
+from talentry_crawler.models import MONITORS_WITHOUT_CLOSE, Board, Company, Job
 
 DEFAULT_DB = OUTPUT_DIR / "jobs.db"
 
@@ -33,6 +33,17 @@ def _stored_description(description: str | None) -> str | None:
     if not description:
         return None
     return description[:MAX_STORED_DESCRIPTION]
+
+
+def _json_list(raw: str | None) -> list[str]:
+    """Read a JSON list column; a damaged value just means 'no locations'."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [str(item) for item in value] if isinstance(value, list) else []
 
 
 SCHEMA = """
@@ -49,6 +60,7 @@ CREATE TABLE IF NOT EXISTS companies (
 
 CREATE TABLE IF NOT EXISTS jobs (
     url TEXT PRIMARY KEY,
+    external_id TEXT,
     company_slug TEXT NOT NULL,
     board_slug TEXT NOT NULL,
     monitor_type TEXT NOT NULL,
@@ -75,6 +87,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_slug);
 CREATE INDEX IF NOT EXISTS idx_jobs_board ON jobs(board_slug);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+-- One row per provider posting, even when several searches report it under
+-- different publisher URLs (JSearch's job_uid). NULLs are free to repeat.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_external_id
+    ON jobs(external_id) WHERE external_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -86,14 +102,14 @@ CREATE TABLE IF NOT EXISTS meta (
 # first_seen_at is deliberately not in the UPDATE list: it keeps the original date.
 SAVE_JOB = """
 INSERT INTO jobs (
-    url, company_slug, board_slug, monitor_type,
+    url, external_id, company_slug, board_slug, monitor_type,
     title, description, locations_json, employment_type, workplace_type,
     date_posted, salary_json, metadata_json,
     seniority, occupation, technologies_json,
     embedding_json, embedding_text_hash, embedding_updated_at,
     status, first_seen_at, last_seen_at
 ) VALUES (
-    :url, :company_slug, :board_slug, :monitor_type,
+    :url, :external_id, :company_slug, :board_slug, :monitor_type,
     :title, :description, :locations_json, :employment_type, :workplace_type,
     :date_posted, :salary_json, :metadata_json,
     :seniority, :occupation, :technologies_json,
@@ -101,6 +117,7 @@ INSERT INTO jobs (
     'open', :now, :now
 )
 ON CONFLICT(url) DO UPDATE SET
+    external_id = COALESCE(excluded.external_id, jobs.external_id),
     company_slug = excluded.company_slug,
     board_slug = excluded.board_slug,
     monitor_type = excluded.monitor_type,
@@ -122,7 +139,8 @@ ON CONFLICT(url) DO UPDATE SET
 -- Rewriting every description on every crawl was generating hundreds of MB of
 -- WAL and dead TOAST data (Neon counts that against the project size limit).
 WHERE
-    jobs.company_slug IS NOT excluded.company_slug
+    jobs.external_id IS NOT excluded.external_id
+    OR jobs.company_slug IS NOT excluded.company_slug
     OR jobs.board_slug IS NOT excluded.board_slug
     OR jobs.monitor_type IS NOT excluded.monitor_type
     OR jobs.title IS NOT excluded.title
@@ -191,6 +209,7 @@ class JobStore:
         self._conn = sqlite3.connect(self.path)
         self._conn.row_factory = sqlite3.Row
         self._refuse_old_database()
+        self._add_missing_columns()
         self._conn.executescript(SCHEMA)
 
     def _refuse_old_database(self) -> None:
@@ -201,6 +220,12 @@ class JobStore:
                 f"{self.path} was created by an older version of the crawler. "
                 "Delete that file and run again (it only holds crawled jobs, which are quick to re-fetch)."
             )
+
+    def _add_missing_columns(self) -> None:
+        """Additive only, so an existing output/jobs.db keeps working."""
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(jobs)")}
+        if columns and "external_id" not in columns:
+            self._conn.execute("ALTER TABLE jobs ADD COLUMN external_id TEXT")
 
     # ---- writing -------------------------------------------------------------
 
@@ -250,7 +275,8 @@ class JobStore:
         rows = [
             {
                 "url": job.url,
-                "company_slug": board.company_slug,
+                "external_id": job.external_id,
+                "company_slug": job.company_slug or board.company_slug,
                 "board_slug": board.board_slug,
                 "monitor_type": board.monitor_type,
                 "title": job.title,
@@ -271,8 +297,31 @@ class JobStore:
             }
             for job in jobs
         ]
+        employers = {
+            job.company_slug: (
+                job.company_slug,
+                job.company_name,
+                job.company_website,
+                job.company_logo_url,
+            )
+            for job in jobs
+            if job.company_slug and job.company_name
+        }
 
         with self._conn:  # one transaction: all of it is saved, or none of it
+            if employers:
+                # Aggregated postings carry their own employer. Never overwrite
+                # curated company data (name, industry, ...) with a scrape.
+                self._conn.executemany(
+                    """
+                    INSERT INTO companies (slug, name, website, logo_url)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(slug) DO UPDATE SET
+                        website = COALESCE(companies.website, excluded.website),
+                        logo_url = COALESCE(companies.logo_url, excluded.logo_url)
+                    """,
+                    list(employers.values()),
+                )
             self._conn.executemany(SAVE_JOB, rows)
             # SAVE_JOB skips unchanged content, so mark every job we saw as seen
             # in a cheap second pass. This keeps last_seen_at (and therefore the
@@ -287,6 +336,10 @@ class JobStore:
                     (now, board.board_slug, *chunk),
                 )
             # Everything we just saw has last_seen_at == now. Anything older was not on the page.
+            # Search-backed sources (JSearch) only return a page of hits, so a job
+            # missing today is not gone; the 30-day stale purge handles those.
+            if board.monitor_type in MONITORS_WITHOUT_CLOSE:
+                return len(urls - known), len(urls & known), 0
             closed = self._conn.execute(
                 """
                 UPDATE jobs SET status = 'closed', closed_at = ?
@@ -297,6 +350,60 @@ class JobStore:
 
         return len(urls - known), len(urls & known), closed
 
+    def touch_urls(self, urls: list[str]) -> int:
+        """Refresh jobs we already have under another search/board.
+
+        Used when a search returns a posting we stored before (same external
+        id, different publisher URL): keep the original row, just mark it seen.
+        """
+        if not urls:
+            return 0
+        now = _now()
+        touched = 0
+        with self._conn:
+            for chunk in _chunked(sorted(set(urls))):
+                placeholders = ",".join("?" * len(chunk))
+                touched += self._conn.execute(
+                    f"UPDATE jobs SET last_seen_at = ? WHERE url IN ({placeholders})",
+                    (now, *chunk),
+                ).rowcount
+                self._conn.execute(
+                    f"""
+                    UPDATE jobs SET status = 'open', closed_at = NULL
+                    WHERE status = 'closed' AND url IN ({placeholders})
+                    """,
+                    chunk,
+                )
+        return touched
+
+    def known_urls(self, urls: set[str]) -> set[str]:
+        """Which of these URLs are already in the table (any board)."""
+        found: set[str] = set()
+        for chunk in _chunked(sorted(urls)):
+            placeholders = ",".join("?" * len(chunk))
+            found.update(
+                row[0]
+                for row in self._conn.execute(
+                    f"SELECT url FROM jobs WHERE url IN ({placeholders})", chunk
+                )
+            )
+        return found
+
+    def known_external_ids(self, ids: set[str]) -> dict[str, str]:
+        """Map provider id -> stored url, for postings we already have."""
+        found: dict[str, str] = {}
+        for chunk in _chunked(sorted(ids)):
+            placeholders = ",".join("?" * len(chunk))
+            found.update(
+                (row[0], row[1])
+                for row in self._conn.execute(
+                    f"SELECT external_id, url FROM jobs "
+                    f"WHERE external_id IN ({placeholders})",
+                    chunk,
+                )
+            )
+        return found
+
     def embedding_hashes(self, board: Board) -> dict[str, str]:
         """Return the embedding-text hash already stored for each job on a board."""
         rows = self._conn.execute(
@@ -304,6 +411,55 @@ class JobStore:
             (board.board_slug,),
         ).fetchall()
         return {row["url"]: row["embedding_text_hash"] for row in rows if row["embedding_text_hash"]}
+
+    def open_postings(self, company_slugs: set[str]) -> list[dict]:
+        """Open jobs of these companies, for the aggregator duplicate check."""
+        if not company_slugs:
+            return []
+        found: list[dict] = []
+        for chunk in _chunked(sorted(company_slugs)):
+            placeholders = ",".join("?" * len(chunk))
+            rows = self._conn.execute(
+                f"""
+                SELECT url, company_slug, title, locations_json, monitor_type
+                FROM jobs WHERE status = 'open' AND company_slug IN ({placeholders})
+                """,
+                chunk,
+            )
+            for row in rows:
+                found.append(
+                    {
+                        "url": row["url"],
+                        "company_slug": row["company_slug"],
+                        "title": row["title"],
+                        "locations": _json_list(row["locations_json"]),
+                        "monitor_type": row["monitor_type"],
+                    }
+                )
+        return found
+
+    # ---- budget / housekeeping ------------------------------------------------
+
+    def get_meta(self, key: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row is not None else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
+            )
+
+    def count_jobs(self, *, monitor_type: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE monitor_type = ?", (monitor_type,)
+        ).fetchone()
+        return int(row[0])
+
+    def database_bytes(self) -> int:
+        return self.path.stat().st_size if self.path.exists() else 0
 
     # ---- reading (used by the CLI) -------------------------------------------
 

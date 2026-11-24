@@ -36,6 +36,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Store every job, not just tech / data / engineering roles",
     )
+    run.add_argument(
+        "--jsearch-now",
+        action="store_true",
+        help=(
+            "Run JSearch even if this week's run already happened "
+            "(still capped by the monthly request budget)"
+        ),
+    )
     run.add_argument("--quiet", action="store_true", help="Only print the final summary")
 
     stats = commands.add_parser("stats", help="Show counts in the jobs database")
@@ -59,18 +67,23 @@ def _format_progress(result: BoardRunResult, done: int, total: int) -> str:
 
 
 def _print_run_summary(results: list[BoardRunResult]) -> None:
-    ok = [r for r in results if r.error is None]
+    ok = [r for r in results if r.error is None and r.note is None]
     failed = [r for r in results if r.error is not None]
+    skipped = [r for r in results if r.note]
     print(
-        f"boards={len(results)} ok={len(ok)} failed={len(failed)} "
+        f"boards={len(ok) + len(failed)} ok={len(ok)} failed={len(failed)} "
+        f"skipped={len(skipped)} "
         f"jobs={sum(r.job_count for r in ok)} "
         f"new={sum(r.inserted for r in ok)} "
         f"refreshed={sum(r.updated for r in ok)} "
+        f"dupes={sum(r.duplicates for r in ok)} "
         f"closed={sum(r.closed for r in ok)}"
     )
     for r in results:
         if r.error:
             print(f"  FAIL {r.board_slug} ({r.monitor_type}): {r.error}", file=sys.stderr)
+        elif r.note:
+            print(f"  SKIP {r.monitor_type}: {r.note}", file=sys.stderr)
         else:
             print(f"  OK   {r.board_slug}: {r.job_count} jobs (new {r.inserted}, closed {r.closed})")
 
@@ -106,6 +119,7 @@ def _run(args: argparse.Namespace) -> int:
             concurrency=args.concurrency,
             on_progress=on_progress,
             tech_only=not args.all_jobs,
+            jsearch_now=args.jsearch_now,
         )
     )
     if not results:

@@ -68,6 +68,11 @@ export async function runMigrations() {
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS id BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE;
     -- The UNIQUE constraint already backs lookups, so drop the old extra index.
     DROP INDEX IF EXISTS idx_jobs_id;
+    -- Provider posting id (JSearch's job_uid), so one posting returned by
+    -- several searches is stored once even when the publisher URLs differ.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS external_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_external_id
+      ON jobs (external_id) WHERE external_id IS NOT NULL;
     -- Backs the role picker's open-job counts and the role filter.
     CREATE INDEX IF NOT EXISTS idx_jobs_status_occupation ON jobs(status, occupation);
     -- Semantic search data. The crawler writes these with each job.
@@ -262,6 +267,29 @@ export async function runMigrations() {
     );
     CREATE INDEX IF NOT EXISTS idx_notifications_user
       ON notifications (user_id, created_at DESC);
+  `);
+
+  // Bookkeeping for periodic maintenance. The cleanup job remembers when it
+  // last rewrote `jobs` so it only does it again once bloat has built up.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maintenance_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // The crawler refreshes last_seen_at for every job it sees. Leaving room on
+  // each page lets Postgres reuse that space in place (HOT update) instead of
+  // appending a new row version every crawl. Takes effect at the next rewrite.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.jobs') IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE jobs SET (fillfactor = 85)';
+      END IF;
+    END
+    $$;
   `);
 
   // One agent application per user and job. Retrying or cancelling updates the

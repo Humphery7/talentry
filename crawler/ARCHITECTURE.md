@@ -57,8 +57,9 @@ crawler/
    The one small exception: `storage` reads the `output/` folder location from `config/paths.py`.
 2. **One full-API ATS = one file** under `ats/`, plus one line in `ats/__init__.py` (`REGISTRY`). Providers that need a browser bootstrap or a separate detail phase belong in a `providers/<name>/` package instead; do not hide a hybrid provider behind a single `ats/` file.
 3. **CSV is the source of truth for "what to crawl".** The database only holds *jobs found*.
-4. **Only a successful fetch can close jobs.** If a board's site is down, its jobs stay open. A job is closed only when we successfully read the page and it wasn't there.
+4. **Only a successful fetch can close jobs.** If a board's site is down, its jobs stay open. A job is closed only when we successfully read the page and it wasn't there. Search-backed sources (JSearch) are exempt: their page is a top-10 slice, not the whole board, so `MONITORS_WITHOUT_CLOSE` keeps those rows open until the stale purge removes them.
 5. **The crawler has no HTTP API.** It is a background worker. The website reads the same database later; it never calls this code.
+6. **When in doubt, keep the job.** Dedupe may drop a row only on an exact, unambiguous match: a provider id (`external_id`), the same URL, or a unique company + title + city that an employer's own board already stored. A duplicate costs ~8 KB; a wrongly merged job costs a real opportunity, and content-based matching once deleted 3,057 genuine requisitions.
 
 ## Where things go: "I want to change X"
 
@@ -67,9 +68,11 @@ crawler/
 | crawl one more company | `data/companies.csv` + `data/boards.csv` (no code) |
 | label more technologies / titles | `data/technologies.csv`, `occupations.csv`, `seniority.csv` (no code) |
 | support a new full-API ATS | new `ats/<name>.py` + one `REGISTRY` line |
+| add a source with an API quota / aggregated jobs | `ats/jsearch.py` + `pipeline/jsearch_budget.py` |
+| stop an aggregator copy of a job an employer board already has | `pipeline/duplicate_guard.py` |
 | support a hybrid ATS (API + browser/detail) | new `providers/<name>/` package |
 | change how jobs are labeled | `labeling/labeler.py` |
-| add a column to the database | `storage/sqlite.py` (`SCHEMA` + `SAVE_JOB`) and the `Job` model |
+| add a column to the database | `storage/sqlite.py` + `storage/postgres.py` (`SCHEMA` + `SAVE_JOB`), the `Job` model, and `talentry-backend/src/db/migrate.ts` |
 | move from SQLite to Postgres | `storage/` only |
 
 ## Example path for one Stripe job

@@ -33,6 +33,11 @@ class Board:
     scraper_config: dict[str, Any] = field(default_factory=dict)
 
 
+# Sources that return the top N hits of a *search*, not a full board. A job
+# missing from one response is not gone, so these never close rows on a crawl.
+MONITORS_WITHOUT_CLOSE = frozenset({"jsearch"})
+
+
 @dataclass(slots=True)
 class Job:
     """One job posting, in the same shape no matter which ATS it came from."""
@@ -46,6 +51,17 @@ class Job:
     date_posted: str | None = None
     salary: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+
+    # Aggregators (JSearch) report one employer per job instead of one board
+    # per employer. Left empty by ATS adapters, where the board's company wins.
+    company_slug: str | None = None
+    company_name: str | None = None
+    company_logo_url: str | None = None
+    company_website: str | None = None
+
+    # The provider's own id for this posting. Lets a job returned by several
+    # searches be stored once even when each search reports a different URL.
+    external_id: str | None = None
 
     # Filled in by the labeling step (not by the ATS adapters):
     seniority: str | None = None  # e.g. "senior"

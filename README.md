@@ -187,6 +187,21 @@ cancelled agent applications after 24 hours, and after 30 days keeps submitted
 applications as a record but removes their generated documents and filled-in
 details. Run it manually with `npm run db:cleanup`.
 
+That job also keeps the `jobs` table from creeping up on Neon's free storage
+limit. When per-row growth says bloat is worth the lock — at most once every
+six days — it rewrites the table with `VACUUM FULL`, which is the only
+operation that returns space to Neon. If the rewrite would not fit, the
+embedding index is dropped for the duration and rebuilt afterwards; career
+matching still works without it, just slower. Progress is recorded in
+`maintenance_state`.
+
+It deliberately does not dedupe by content: boards routinely publish different
+requisitions with the same title and boilerplate description, so text matching
+deletes real jobs. The crawler already upserts by URL.
+
+Set `DB_STORAGE_LIMIT_MB` (backend `.env`, default `1000`) if your Postgres
+plan is larger or smaller than 1 GB, so the headroom check stays accurate.
+
 The API's routes are under `/auth`, `/jobs`, `/companies`, `/applications`,
 `/agent-applications`, `/notifications`, `/candidate-profile`,
 `/recommendations`, and `/interview`.
@@ -317,6 +332,7 @@ handlers, so the browser never needs the API URL directly. Override it with
 | Variable | Service | Required | Default / notes |
 |---|---|---|---|
 | `DATABASE_URL` | backend, career, crawler | backend & career | Same database for all three. Crawler falls back to SQLite when unset. |
+| `JSEARCH_API_KEY` | crawler | no | Enables the JSearch (OpenWebNinja) source. Add it as a repository secret too. The crawler spends at most `JSEARCH_MONTHLY_REQUESTS` (default 180) calls a month, once a week. |
 | `JWT_SECRET` | backend | recommended | Signs login tokens. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
 | `SESSION_SECRET` | backend | recommended | Signs the OAuth session cookie. Generate the same way. |
 | `PORT` | backend | no | `3001` |

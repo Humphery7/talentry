@@ -20,10 +20,15 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from talentry_crawler.models import Board, Company, Job
+from talentry_crawler.models import MONITORS_WITHOUT_CLOSE, Board, Company, Job
 
 from .db import get_database_url, get_engine, masked_url
-from .sqlite import _companies_fingerprint, _embedding_or_none, _stored_description
+from .sqlite import (
+    _companies_fingerprint,
+    _embedding_or_none,
+    _json_list,
+    _stored_description,
+)
 
 SCHEMA = """
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -41,6 +46,7 @@ CREATE TABLE IF NOT EXISTS companies (
 
 CREATE TABLE IF NOT EXISTS jobs (
     url TEXT PRIMARY KEY,
+    external_id TEXT,
     company_slug TEXT NOT NULL,
     board_slug TEXT NOT NULL,
     monitor_type TEXT NOT NULL,
@@ -64,9 +70,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     closed_at TEXT
 );
 
+-- Databases created before JSearch existed need the column added.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS external_id TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_slug);
 CREATE INDEX IF NOT EXISTS idx_jobs_board ON jobs(board_slug);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+-- One row per provider posting, even when several searches report it under
+-- different publisher URLs (JSearch's job_uid). NULLs are free to repeat.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_external_id
+    ON jobs(external_id) WHERE external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_jobs_embedding
     ON jobs USING hnsw (embedding vector_cosine_ops);
 
@@ -98,14 +111,14 @@ ON CONFLICT (slug) DO UPDATE SET
 # first_seen_at is deliberately not in the UPDATE list: it keeps the original date.
 SAVE_JOB = """
 INSERT INTO jobs (
-    url, company_slug, board_slug, monitor_type,
+    url, external_id, company_slug, board_slug, monitor_type,
     title, description, locations_json, employment_type, workplace_type,
     date_posted, salary_json, metadata_json,
     seniority, occupation, technologies_json,
     embedding, embedding_text_hash, embedding_updated_at,
     status, first_seen_at, last_seen_at
 ) VALUES (
-    :url, :company_slug, :board_slug, :monitor_type,
+    :url, :external_id, :company_slug, :board_slug, :monitor_type,
     :title, :description, :locations_json, :employment_type, :workplace_type,
     :date_posted, :salary_json, :metadata_json,
     :seniority, :occupation, :technologies_json,
@@ -114,6 +127,7 @@ INSERT INTO jobs (
     'open', :now, :now
 )
 ON CONFLICT (url) DO UPDATE SET
+    external_id = COALESCE(EXCLUDED.external_id, jobs.external_id),
     company_slug = EXCLUDED.company_slug,
     board_slug = EXCLUDED.board_slug,
     monitor_type = EXCLUDED.monitor_type,
@@ -135,7 +149,8 @@ ON CONFLICT (url) DO UPDATE SET
 -- Rewriting every description on every crawl was generating hundreds of MB of
 -- WAL and dead TOAST data (Neon counts that against the project size limit).
 WHERE
-    jobs.company_slug IS DISTINCT FROM EXCLUDED.company_slug
+    jobs.external_id IS DISTINCT FROM EXCLUDED.external_id
+    OR jobs.company_slug IS DISTINCT FROM EXCLUDED.company_slug
     OR jobs.board_slug IS DISTINCT FROM EXCLUDED.board_slug
     OR jobs.monitor_type IS DISTINCT FROM EXCLUDED.monitor_type
     OR jobs.title IS DISTINCT FROM EXCLUDED.title
@@ -232,13 +247,38 @@ class PostgresJobStore:
             ).fetchall()
             known = {r[0] for r in known_rows}
 
+            employers = {
+                job.company_slug: {
+                    "slug": job.company_slug,
+                    "name": job.company_name,
+                    "website": job.company_website,
+                    "logo_url": job.company_logo_url,
+                }
+                for job in jobs
+                if job.company_slug and job.company_name
+            }
+            if employers:
+                # Aggregated postings carry their own employer. Never overwrite
+                # curated company data (name, industry, ...) with a scrape.
+                conn.execute(
+                    text(
+                        "INSERT INTO companies (slug, name, website, logo_url) "
+                        "VALUES (:slug, :name, :website, :logo_url) "
+                        "ON CONFLICT (slug) DO UPDATE SET "
+                        "website = COALESCE(companies.website, EXCLUDED.website), "
+                        "logo_url = COALESCE(companies.logo_url, EXCLUDED.logo_url)"
+                    ),
+                    list(employers.values()),
+                )
+
             if jobs:
                 conn.execute(
                     text(SAVE_JOB),
                     [
                         {
                             "url": job.url,
-                            "company_slug": board.company_slug,
+                            "external_id": job.external_id,
+                            "company_slug": job.company_slug or board.company_slug,
                             "board_slug": board.board_slug,
                             "monitor_type": board.monitor_type,
                             "title": job.title,
@@ -264,13 +304,31 @@ class PostgresJobStore:
             # in a cheap second pass. This keeps last_seen_at (and therefore the
             # close step below) accurate without rewriting descriptions.
             if urls:
+                # Only last_seen_at changes for jobs already open. That column
+                # is not indexed, so the update can reuse the free space left
+                # on the page by fillfactor=85 instead of appending a new row
+                # version (and growing TOAST) on every crawl.
                 conn.execute(
                     text(
-                        "UPDATE jobs SET last_seen_at = :now, status = 'open', closed_at = NULL "
+                        "UPDATE jobs SET last_seen_at = :now "
                         "WHERE board_slug = :b AND url = ANY(:urls)"
                     ),
                     {"now": now, "b": board.board_slug, "urls": sorted(urls)},
                 )
+                # Reopening is rare, so it is a separate statement: changing
+                # the indexed status makes an update non-HOT and costs a page.
+                conn.execute(
+                    text(
+                        "UPDATE jobs SET status = 'open', closed_at = NULL "
+                        "WHERE board_slug = :b AND status = 'closed' "
+                        "AND url = ANY(:urls)"
+                    ),
+                    {"b": board.board_slug, "urls": sorted(urls)},
+                )
+            # Search-backed sources (JSearch) only return a page of hits, so a
+            # job missing today is not gone; the 30-day stale purge handles it.
+            if board.monitor_type in MONITORS_WITHOUT_CLOSE:
+                return len(urls - known), len(urls & known), 0
             closed = conn.execute(
                 text(
                     "UPDATE jobs SET status = 'closed', closed_at = :now "
@@ -280,6 +338,51 @@ class PostgresJobStore:
             ).rowcount or 0
 
         return len(urls - known), len(urls & known), int(closed)
+
+    def touch_urls(self, urls: list[str]) -> int:
+        """Refresh jobs we already have under another search/board."""
+        if not urls:
+            return 0
+        now = _now()
+        unique = sorted(set(urls))
+        with self._engine.begin() as conn:
+            touched = conn.execute(
+                text("UPDATE jobs SET last_seen_at = :now WHERE url = ANY(:urls)"),
+                {"now": now, "urls": unique},
+            ).rowcount or 0
+            conn.execute(
+                text(
+                    "UPDATE jobs SET status = 'open', closed_at = NULL "
+                    "WHERE status = 'closed' AND url = ANY(:urls)"
+                ),
+                {"urls": unique},
+            )
+        return int(touched)
+
+    def known_urls(self, urls: set[str]) -> set[str]:
+        """Which of these URLs are already in the table (any board)."""
+        if not urls:
+            return set()
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT url FROM jobs WHERE url = ANY(:urls)"),
+                {"urls": sorted(urls)},
+            ).fetchall()
+        return {row[0] for row in rows}
+
+    def known_external_ids(self, ids: set[str]) -> dict[str, str]:
+        """Map provider id -> stored url, for postings we already have."""
+        if not ids:
+            return {}
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT external_id, url FROM jobs "
+                    "WHERE external_id = ANY(:ids)"
+                ),
+                {"ids": sorted(ids)},
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
 
     def embedding_hashes(self, board: Board) -> dict[str, str]:
         """Return the embedding-text hash already stored for each job on a board."""
@@ -292,6 +395,63 @@ class PostgresJobStore:
                 {"b": board.board_slug},
             ).fetchall()
         return {row[0]: row[1] for row in rows}
+
+    # ---- budget / housekeeping -----------------------------------------------
+
+    def open_postings(self, company_slugs: set[str]) -> list[dict]:
+        """Open jobs of these companies, for the aggregator duplicate check."""
+        if not company_slugs:
+            return []
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT url, company_slug, title, locations_json, monitor_type "
+                    "FROM jobs WHERE status = 'open' AND company_slug = ANY(:slugs)"
+                ),
+                {"slugs": sorted(company_slugs)},
+            ).fetchall()
+        return [
+            {
+                "url": row[0],
+                "company_slug": row[1],
+                "title": row[2],
+                "locations": _json_list(row[3]),
+                "monitor_type": row[4],
+            }
+            for row in rows
+        ]
+
+    def get_meta(self, key: str) -> str | None:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT value FROM meta WHERE key = :k"), {"k": key}
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO meta (key, value) VALUES (:k, :v) "
+                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+                ),
+                {"k": key, "v": value},
+            )
+
+    def count_jobs(self, *, monitor_type: str) -> int:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT COUNT(*) FROM jobs WHERE monitor_type = :m"),
+                {"m": monitor_type},
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def database_bytes(self) -> int:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT pg_database_size(current_database())")
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     # ---- reading (used by the CLI) ---------------------------------------
 

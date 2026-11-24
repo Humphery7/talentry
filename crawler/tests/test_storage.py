@@ -108,6 +108,24 @@ def test_old_database_is_refused_with_a_clear_message(tmp_path):
         JobStore(path)
 
 
+def test_an_existing_database_gains_the_external_id_column(tmp_path):
+    path = tmp_path / "jobs.db"
+    first = JobStore(path)
+    first._conn.executescript(
+        "DROP INDEX idx_jobs_external_id; ALTER TABLE jobs DROP COLUMN external_id;"
+    )
+    first.close()
+
+    upgraded = JobStore(path)
+    try:
+        columns = {row["name"] for row in upgraded._conn.execute("PRAGMA table_info(jobs)")}
+        indexes = {row["name"] for row in upgraded._conn.execute("PRAGMA index_list(jobs)")}
+        assert "external_id" in columns
+        assert "idx_jobs_external_id" in indexes
+    finally:
+        upgraded.close()
+
+
 def test_embedding_is_kept_when_the_job_is_refreshed_without_one(store, board):
     vector = [0.1, 0.2, 0.3]
     store.save_board_jobs(

@@ -21,7 +21,9 @@ import httpx
 from talentry_crawler.ats import REGISTRY, get_discoverer
 from talentry_crawler.config import load_boards, load_companies, load_label_dictionaries
 from talentry_crawler.labeling import Labeler
-from talentry_crawler.models import Board, Job
+from talentry_crawler.models import MONITORS_WITHOUT_CLOSE, Board, Job
+from talentry_crawler.pipeline.duplicate_guard import EmployerIndex, drop_employer_copies
+from talentry_crawler.pipeline.jsearch_budget import plan_jsearch, record_jsearch_spend
 from talentry_crawler.pipeline.tech_filter import is_tech_job
 from talentry_crawler.storage import JobStore
 from talentry_embeddings import build_job_text, embed_texts, text_hash
@@ -40,7 +42,9 @@ class BoardRunResult:
     inserted: int = 0  # new to us
     updated: int = 0  # already known, refreshed
     closed: int = 0  # known before, no longer on the page
+    duplicates: int = 0  # aggregator copies of a job an employer board already has
     error: str | None = None
+    note: str | None = None  # why a whole source was skipped (not a failure)
 
 
 async def crawl_boards(
@@ -54,6 +58,7 @@ async def crawl_boards(
     on_progress: Callable[[BoardRunResult, int, int], None] | None = None,
     embedder: Embedder | None = None,
     tech_only: bool = True,
+    jsearch_now: bool = False,
 ) -> list[BoardRunResult]:
     """Crawl the selected boards and save what we find. One failing board never stops the rest.
 
@@ -76,8 +81,26 @@ async def crawl_boards(
         companies = load_companies()
         store.save_companies(companies)
         company_names = {company.slug: company.name for company in companies}
+        # Resolves an aggregator posting's employer name to a company we crawl.
+        employer_index = EmployerIndex(companies)
         labeler = Labeler(load_label_dictionaries())
         slots = asyncio.Semaphore(concurrency)  # limits how many boards are fetched at once
+        # JSearch credits are the scarce resource, and two searches can return
+        # the same posting. Running its boards one at a time keeps the dedupe
+        # check and the insert in step, and avoids hammering the API.
+        jsearch_slots = asyncio.Semaphore(1)
+
+        notes: list[BoardRunResult] = []
+        jsearch_boards = [b for b in boards if b.monitor_type == "jsearch"]
+        planned_requests = 0
+        if jsearch_boards:
+            plan = plan_jsearch(store, jsearch_boards, force=jsearch_now)
+            planned_requests = plan.requests
+            if plan.note:
+                notes.append(
+                    BoardRunResult("jsearch", "jsearch", "jsearch", note=plan.note)
+                )
+            boards = [b for b in boards if b.monitor_type != "jsearch"] + plan.boards
 
         # 3. Crawl every board (up to `concurrency` at once).
         # as_completed (not gather) so we can report progress as each finishes.
@@ -87,9 +110,14 @@ async def crawl_boards(
             headers={"User-Agent": "talentry-crawler/0.1 (+local-dev)"},
         ) as client:
 
-            async def run(index: int, board: Board) -> tuple[int, BoardRunResult]:
-                async with slots:
-                    return index, await crawl_one_board(
+            async def run(board: Board) -> BoardRunResult:
+                gate = (
+                    jsearch_slots
+                    if board.monitor_type in MONITORS_WITHOUT_CLOSE
+                    else slots
+                )
+                async with gate:
+                    return await crawl_one_board(
                         board,
                         client,
                         labeler,
@@ -97,18 +125,36 @@ async def crawl_boards(
                         company_name=company_names.get(board.company_slug),
                         embedder=embedder,
                         tech_only=tech_only,
+                        employer_index=employer_index,
                     )
 
-            tasks = [asyncio.create_task(run(i, b)) for i, b in enumerate(boards)]
-            ordered: list[BoardRunResult | None] = [None] * len(boards)
             done = 0
-            for coro in asyncio.as_completed(tasks):
-                index, result = await coro
-                ordered[index] = result
-                done += 1
-                if on_progress is not None:
-                    on_progress(result, done, len(boards))
-            return [r for r in ordered if r is not None]
+
+            async def run_all(subset: list[Board]) -> list[BoardRunResult]:
+                nonlocal done
+                tasks = [asyncio.create_task(run(b)) for b in subset]
+                finished: list[BoardRunResult] = []
+                for coro in asyncio.as_completed(tasks):
+                    result = await coro
+                    finished.append(result)
+                    done += 1
+                    if on_progress is not None:
+                        on_progress(result, done, len(boards))
+                return finished
+
+            employer_boards = [
+                b for b in boards if b.monitor_type not in MONITORS_WITHOUT_CLOSE
+            ]
+            aggregator_boards = [
+                b for b in boards if b.monitor_type in MONITORS_WITHOUT_CLOSE
+            ]
+            results = await run_all(employer_boards)
+            # Employer boards first, on purpose: the aggregator guard compares
+            # against what the employer's own board just stored today.
+            results += await run_all(aggregator_boards)
+            if jsearch_boards:
+                record_jsearch_spend(store, planned_requests)
+            return notes + results
     finally:
         store.close()
 
@@ -122,8 +168,9 @@ async def crawl_one_board(
     company_name: str | None = None,
     embedder: Embedder | None = None,
     tech_only: bool = True,
+    employer_index: EmployerIndex | None = None,
 ) -> BoardRunResult:
-    """fetch -> label -> filter -> embed -> save, for one board. Errors are reported, not raised."""
+    """fetch -> label -> filter -> dedupe -> embed -> save, for one board. Errors are reported, not raised."""
     result = BoardRunResult(
         board_slug=board.board_slug,
         company_slug=board.company_slug,
@@ -136,6 +183,12 @@ async def crawl_one_board(
             labeler.label(job)
         if tech_only:
             jobs = [job for job in jobs if is_tech_job(job)]
+        found = len(jobs)
+        jobs, refreshed = drop_already_stored(jobs, store)
+        duplicates = 0
+        if employer_index is not None and board.monitor_type in MONITORS_WITHOUT_CLOSE:
+            # Only an aggregator row can be a copy of an employer's own posting.
+            jobs, duplicates = drop_employer_copies(jobs, store, employer_index)
         await embed_jobs(board, jobs, company_name, store, embedder or embed_texts)
         inserted, updated, closed = store.save_board_jobs(board, jobs)
     except Exception as exc:  # noqa: BLE001 — one bad board must not stop the others
@@ -143,9 +196,52 @@ async def crawl_one_board(
         result.error = f"{type(exc).__name__}: {exc}"
         return result
 
-    result.job_count = len(jobs)
-    result.inserted, result.updated, result.closed = inserted, updated, closed
+    result.job_count = found
+    result.inserted = inserted
+    result.updated = updated + refreshed
+    result.closed = closed
+    result.duplicates = duplicates
     return result
+
+
+def drop_already_stored(jobs: list[Job], store: JobStore) -> tuple[list[Job], int]:
+    """Drop postings we already have, returning the new ones and how many were refreshed.
+
+    Only sources that report their own posting id (JSearch's `external_id`)
+    take this path. A posting can arrive several times in one day because five
+    searches match it, often under different publisher URLs; the stored row is
+    kept as it is and merely marked as seen. The URL check also stops a posting
+    we already crawl from the employer's own career page from being rewritten
+    under an aggregator board.
+    """
+    seen_ids: set[str] = set()
+    seen_urls: set[str] = set()
+    unique: list[Job] = []
+    for job in jobs:
+        if job.external_id:
+            if job.external_id in seen_ids or job.url in seen_urls:
+                continue
+            seen_ids.add(job.external_id)
+        elif job.url in seen_urls:
+            continue
+        seen_urls.add(job.url)
+        unique.append(job)
+
+    if not seen_ids:
+        return unique, 0
+
+    known_urls = store.known_urls(seen_urls)
+    known_ids = store.known_external_ids(seen_ids)
+    fresh: list[Job] = []
+    refresh: list[str] = []
+    for job in unique:
+        if job.url in known_urls:
+            refresh.append(job.url)
+        elif job.external_id and job.external_id in known_ids:
+            refresh.append(known_ids[job.external_id])
+        else:
+            fresh.append(job)
+    return fresh, store.touch_urls(refresh)
 
 
 async def embed_jobs(
@@ -163,7 +259,7 @@ async def embed_jobs(
         text = build_job_text(
             title=job.title,
             description=job.description,
-            company_name=company_name,
+            company_name=job.company_name or company_name,
             locations=job.locations,
             employment_type=job.employment_type,
             workplace_type=job.workplace_type,
