@@ -916,11 +916,40 @@ what makes the new code live.
      to. Empty means the three client-side callers (saved jobs, `AuthModal`,
      `ApplyButton`) use the same-origin Next.js proxy, which cannot hit mixed
      content. If you do set it, it must be `https://` (part 8.2).
-2. **Google OAuth for the new address.** In Google Cloud Console → APIs &
-   Services → Credentials → your OAuth client, add the redirect URI
-   `https://141-144-195-131.sslip.io/auth/google/callback`, and set
-   `REDIRECT_URL` to that same value in the backend `.env`, then
-   `sudo systemctl restart talentry-api`.
+2. **Google OAuth for the new address.** Three values have to agree, and they
+   live in three different places:
+
+   | Value | Where | Must be |
+   |---|---|---|
+   | Authorized redirect URI | Google Cloud Console → Credentials → your OAuth client | `https://141-144-195-131.sslip.io/auth/google/callback` |
+   | `REDIRECT_URL` | backend `.env` | the same URL, exactly |
+   | `FRONTEND_URL` | backend `.env` | your Vercel origin, e.g. `https://talentry-virid.vercel.app` (no trailing slash) |
+
+   `REDIRECT_URL` is where Google sends the browser back (this API).
+   `FRONTEND_URL` is where the API sends it next, with the login token. If
+   `FRONTEND_URL` still says `http://localhost:3000`, login "succeeds" and then
+   dumps the user on a dead page.
+
+   After editing `.env`, `sudo systemctl restart talentry-api`. Then check the
+   handshake without a browser:
+
+   ```bash
+   curl -s -D - -o /dev/null https://141-144-195-131.sslip.io/auth/google/login \
+     | grep -iE '^(location|set-cookie)'
+   ```
+
+   The `location` must contain your `redirect_uri` and there must be a
+   `Set-Cookie: connect.sid=...; Secure`. No cookie means the Google callback
+   will answer `400 Login session expired` — that is the `trust proxy` setting
+   in `talentry-backend/src/app.ts`, which must stay in place because nginx is
+   the one doing HTTPS.
+
+   **"Authorized JavaScript origins" can stay `http://localhost:3000`.** That
+   field is only used by Google's browser-side JavaScript SDK. This app never
+   loads it: the Google button is a full-page redirect to
+   `/auth/google/login`. Only the **redirect URI** list matters here. Adding
+   `https://talentry-virid.vercel.app` to the JS origins is harmless, just not
+   required.
 3. **A domain you own.** `sslip.io` is fine for testing but it is not yours.
    When you buy one, point an `A` record at `141.144.195.131`, change
    `server_name` in `/etc/nginx/conf.d/talentry.conf`, and run certbot again

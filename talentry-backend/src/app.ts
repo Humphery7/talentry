@@ -11,6 +11,12 @@ import { routes } from './routes/index.js';
 export function createApp() {
   const app = express();
 
+  // nginx terminates HTTPS and forwards plain HTTP to this process, adding
+  // X-Forwarded-Proto. Without this line Express believes every request arrived
+  // over http, so the "secure" session cookie below is never set and Google
+  // login fails at the callback with "Login session expired".
+  app.set('trust proxy', 1);
+
   app.use(cors()); // allow any origin, same as before
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
