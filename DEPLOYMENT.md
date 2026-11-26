@@ -347,6 +347,8 @@ User=opc
 WorkingDirectory=/home/opc/talentry/talentry-career
 Environment=PYTHONPATH=/home/opc/talentry/talentry-career/src
 Environment=PYTHONUNBUFFERED=1
+# The worker has its own unit below; do not also start a copy inside this one.
+Environment=AGENT_WORKER_ENABLED=0
 ExecStart=/home/opc/talentry/talentry-career/.venv/bin/uvicorn app:app --app-dir src --host 127.0.0.1 --port 8100
 Restart=always
 RestartSec=5
@@ -361,6 +363,15 @@ EOF
 - `PYTHONPATH` lets the code import from `src/`.
 - `PYTHONUNBUFFERED=1` makes logs appear immediately instead of sitting in a
   buffer.
+- `AGENT_WORKER_ENABLED=0` is easy to miss and worth understanding. The career
+  app has a supervisor that starts the auto-apply worker as a **child process**
+  when it boots, so a deployment that only runs the FastAPI app still works.
+  We give the worker its own service (part 6), so without this line the worker
+  runs **twice**: once from systemd, once as a child of this service. It is not
+  catastrophic — the queue is claimed with `FOR UPDATE SKIP LOCKED`, so the two
+  copies will not pick the same job — but it doubles the polling, doubles the
+  memory, and makes logs confusing. `AGENT_WORKER_ENABLED=0` turns the built-in
+  supervisor off. (`npm run dev` sets the same variable, for the same reason.)
 
 The first start failed with:
 
@@ -416,6 +427,10 @@ assuming it is broken.
 real browser to fill in job applications. It has no web port: it polls the
 database for work. That is why it is a separate service — if it crashes it must
 not take the API down with it.
+
+The worker must run in **exactly one place**. The career app can start one by
+itself (part 5 explains `AGENT_WORKER_ENABLED=0`), and this unit starts another.
+Keep the line in part 5, and the only copy will be this service.
 
 It needs Chromium. Playwright downloads its own copy, and we deliberately put
 it in `/opt` instead of the home folder, for the same SELinux reason as above:
