@@ -17,6 +17,12 @@ recommendationsRoutes.post(
   '/refresh',
   requireAuth,
   async (req: Request, res: Response) => {
-    res.json(await recommendationsService.refresh(req.user!.id));
+    // Body may carry `{ filters }`; without it the saved scope is reused.
+    res.json(
+      await recommendationsService.refresh(
+        req.user!.id,
+        (req.body as { filters?: unknown } | undefined)?.filters,
+      ),
+    );
   },
 );

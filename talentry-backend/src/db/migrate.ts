@@ -114,6 +114,17 @@ export async function runMigrations() {
       ON job_recommendations (user_id, rank);
   `);
 
+  // The coach page's saved filters. Written by talentry-career, read here so
+  // the "new jobs available" check uses the same scope as the ranking.
+  // Keep this in sync with talentry-career/src/db/schema.py.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS recommendation_filters (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
   // Interview prep is written by talentry-career, but the API reads it here.
   // Keep this in sync with talentry-career/src/db/schema.py.
   await pool.query(`

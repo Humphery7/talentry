@@ -24,15 +24,36 @@ export interface RecommendationMeta {
   newJobs: number
 }
 
+/**
+ * The saved scope for the career coach. Same keys as the jobs page, minus
+ * salary. `loc` holds region slugs (`us`, `europe`, ...).
+ */
+export interface RecommendationFilters {
+  loc?: string[]
+  lvl?: string[]
+  ind?: string[]
+  sch?: string[]
+  types?: string[]
+  roles?: string[]
+  q?: string
+}
+
 export interface Recommendations {
   data: Recommendation[]
   meta: RecommendationMeta
+  /** `{}` means the coach is searching every open job. */
+  filters: RecommendationFilters
 }
 
 export function listRecommendations() {
   return request<Recommendations>('/api/recommendations')
 }
 
-export function refreshRecommendations() {
-  return request<Recommendations>('/api/recommendations', 'POST')
+/** Omitting `filters` keeps the saved scope; `{}` clears it. */
+export function refreshRecommendations(filters?: RecommendationFilters) {
+  return request<Recommendations>(
+    '/api/recommendations',
+    'POST',
+    filters === undefined ? undefined : { filters },
+  )
 }

@@ -21,7 +21,8 @@ that are not in the profile or the job. If a field is unknown, treat it as unkno
 rather than a reason to reject. Pick at most 10 jobs. If fewer than 10 are plausible,
 return fewer. Sort the results best fit first and give each a score from 0 to 100,
 where 90+ is an exceptional match. The reason must be one short sentence grounded
-in the candidate and the job."""
+in the candidate and the job. If a scope is given, choose only jobs inside that
+scope; never recommend a job outside it."""
 
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -77,13 +78,18 @@ def _format_candidate(candidate: dict[str, Any], index: int) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(profile_text: str, candidates: list[dict[str, Any]]) -> str:
+def build_prompt(
+    profile_text: str,
+    candidates: list[dict[str, Any]],
+    scope: str = "",
+) -> str:
     jobs = "\n\n".join(
         _format_candidate(candidate, index)
         for index, candidate in enumerate(candidates, start=1)
     )
+    scope_block = f"\n\nSCOPE\n{scope}" if scope else ""
     return (
-        f"CANDIDATE PROFILE\n{profile_text}\n\n"
+        f"CANDIDATE PROFILE\n{profile_text}{scope_block}\n\n"
         f"CANDIDATE JOBS ({len(candidates)} jobs, pre-ranked by semantic similarity)\n\n"
         f"{jobs}\n\n"
         f"Return the best up to {FINAL_LIMIT} job IDs for this candidate."
@@ -135,6 +141,7 @@ def rank_candidates(
     profile_text: str,
     candidates: list[dict[str, Any]],
     api_key: str | None = None,
+    scope: str = "",
 ) -> list[dict[str, Any]] | None:
     if not candidates:
         return []
@@ -145,7 +152,7 @@ def rank_candidates(
     try:
         interaction = _client(api_key).interactions.create(
             model=settings.GEMINI_MODEL,
-            input=build_prompt(profile_text, candidates),
+            input=build_prompt(profile_text, candidates, scope),
             system_instruction=SYSTEM_INSTRUCTION,
             response_format={
                 "type": "text",

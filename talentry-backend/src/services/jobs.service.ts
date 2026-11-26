@@ -28,7 +28,7 @@ const SELECT = `
 const LEVEL_MAP: Record<string, string[]> = {
   'junior level': ['entry', 'junior'],
   'mid level': ['mid'],
-  'senior level': ['senior', 'staff', 'principal', 'director', 'lead'],
+  'senior level': ['senior', 'staff', 'principal', 'director', 'lead', 'executive'],
 };
 
 /** First present key among salary_json variants, as a number (or NULL). */
@@ -91,7 +91,7 @@ function parseJson(raw: unknown): unknown {
  */
 let locationIndex: { at: number; byRegion: Map<string, string[]> } | null = null;
 
-async function getLocationIndex(): Promise<Map<string, string[]>> {
+export async function getLocationIndex(): Promise<Map<string, string[]>> {
   if (locationIndex && Date.now() - locationIndex.at < FACET_TTL_MS) {
     return locationIndex.byRegion;
   }
@@ -121,7 +121,7 @@ async function getLocationIndex(): Promise<Map<string, string[]>> {
   return byRegion;
 }
 
-function buildWhere(
+export function buildWhere(
   q: JobsQuery,
   regionLocs?: Map<string, string[]>,
 ): { sql: string; params: unknown[] } {

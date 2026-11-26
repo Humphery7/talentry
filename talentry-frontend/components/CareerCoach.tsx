@@ -7,8 +7,11 @@ import {
   listRecommendations,
   refreshRecommendations,
   type Recommendation,
+  type RecommendationFilters,
   type Recommendations,
 } from '@/lib/recommendations'
+import type { JobFacets } from '@/lib/data'
+import { CoachFilters } from './CoachFilters'
 import { type CandidateProfile, useCandidateProfile } from './CandidateProfile'
 import KeyNotice from './KeyNotice'
 import { PageHead } from './ui'
@@ -120,7 +123,7 @@ function RecommendationCard({
   )
 }
 
-export function CareerCoach() {
+export function CareerCoach({ facets }: { facets: JobFacets }) {
   const { user, profile } = useCandidateProfile()
   const [recs, setRecs] = useState<Recommendations | null>(null)
   const [loading, setLoading] = useState(false)
@@ -168,12 +171,12 @@ export function CareerCoach() {
     })
   }, [recs])
 
-  async function generate() {
+  async function generate(filters?: RecommendationFilters) {
     setBusy(true)
     setError('')
     setKeyNeeded(false)
     try {
-      setRecs(await refreshRecommendations())
+      setRecs(await refreshRecommendations(filters))
     } catch (err) {
       setKeyNeeded(needsKey(err))
       setError(message(err))
@@ -352,6 +355,20 @@ export function CareerCoach() {
           We use these details and your CV to rank open roles. Update your{' '}
           <Link href="/profile">profile</Link> any time.
         </p>
+      </section>
+
+      <section style={{ marginBottom: 24 }}>
+        <h2 style={{ fontSize: 24 }}>Jobs to consider</h2>
+        <p className="m" style={{ margin: '8px 0 16px' }}>
+          The coach only searches jobs inside this scope — the similarity
+          search and the final ranking both respect it.
+        </p>
+        <CoachFilters
+          facets={facets}
+          applied={recs?.filters ?? {}}
+          busy={busy}
+          onApply={filters => void generate(filters)}
+        />
       </section>
 
       {error && keyNeeded ? <KeyNotice message={error} /> : null}

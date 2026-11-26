@@ -1,8 +1,9 @@
 'use client'
-import { useEffect, useRef, useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { roleLabel, type Facet, type JobFacets } from '@/lib/data'
+import { roleLabel, type JobFacets } from '@/lib/data'
 import { Icon } from './ui'
+import { Picker, labelFor } from './Picker'
 
 const DEFAULT_SALARY_MIN = 35
 const DEFAULT_SALARY_MAX = 150
@@ -69,71 +70,6 @@ function activeCount(sp: URLSearchParams) {
   return n
 }
 
-function labelFor(options: Facet[], slug: string) {
-  return options.find(o => o.slug === slug)?.label ?? slug
-}
-
-type PickerProps = {
-  id: string
-  label: string
-  placeholder: string
-  options: Facet[]
-  value: string[]
-  onChange: (next: string[]) => void
-  /** Roles are labelled from the slug when the API sends no label. */
-  labelOf?: (slug: string) => string
-  noun: string
-}
-
-function Picker({ id, label, placeholder, options, value, onChange, labelOf, noun }: PickerProps) {
-  const [open, setOpen] = useState(false), [term, setTerm] = useState('')
-  const box = useRef<HTMLDivElement>(null)
-  const labelText = labelOf ?? ((slug: string) => labelFor(options, slug))
-
-  useEffect(() => {
-    if (!open) return
-    const onDoc = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false) }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
-  }, [open])
-
-  const toggle = (slug: string) =>
-    onChange(value.includes(slug) ? value.filter(x => x !== slug) : [...value, slug])
-  const shown = term.trim()
-    ? options.filter(o => labelText(o.slug).toLowerCase().includes(term.trim().toLowerCase()))
-    : options
-
-  return (
-    <div className="rolepick" ref={box}>
-      <label htmlFor={id}>{label}</label>
-      <button id={id} type="button" className="f rolebtn" aria-expanded={open} aria-haspopup="listbox" onClick={() => setOpen(v => !v)}>
-        <span>{value.length ? `${value.length} ${noun}${value.length > 1 ? 's' : ''} selected` : placeholder}</span>
-        <span className={'caret' + (open ? ' up' : '')} aria-hidden="true">⌄</span>
-      </button>
-      {open && <div className="roledrop">
-        {options.length > 8 && (
-          <input className="f" autoFocus value={term} placeholder={`Search ${label.toLowerCase()}…`} aria-label={`Search ${label}`} onChange={e => setTerm(e.target.value)} />
-        )}
-        <div className="rolelist" role="listbox" aria-multiselectable="true">
-          {shown.length
-            ? shown.map(o => <label className="roleopt" key={o.slug}>
-              <input type="checkbox" checked={value.includes(o.slug)} onChange={() => toggle(o.slug)} />
-              <span>{labelText(o.slug)}</span>{o.count > 0 && <em>{o.count.toLocaleString()}</em>}
-            </label>)
-            : <p className="rolempty">{options.length ? `No matches for “${term}”.` : 'Options are unavailable right now.'}</p>}
-        </div>
-        <div className="rolefoot"><span>{options.length} option{options.length === 1 ? '' : 's'}</span>
-          {value.length ? <button type="button" className="linkbtn" onClick={() => onChange([])}>Clear</button> : null}</div>
-      </div>}
-      {value.length > 0 && <div className="rolechips">{value.map(slug =>
-        <button type="button" className="chip" key={slug} onClick={() => toggle(slug)} aria-label={`Remove ${labelText(slug)}`}>
-          {labelText(slug)} ×</button>)}</div>}
-    </div>
-  )
-}
-
 function Keywords({ value, onChange, onApply }: { value: string; onChange: (v: string) => void; onApply: () => void }) {
   return <div><label htmlFor="q">Keywords</label>
     <input id="q" className="f" type="search" value={value} placeholder="e.g. React, fintech, growth"
@@ -142,7 +78,7 @@ function Keywords({ value, onChange, onApply }: { value: string; onChange: (v: s
 }
 
 /** Shown when the API cannot supply counts, so the filters still work. */
-const FALLBACK: Pick<JobFacets, 'locations' | 'levels' | 'workplaces' | 'types'> = {
+export const FILTER_FALLBACK: Pick<JobFacets, 'locations' | 'levels' | 'workplaces' | 'types'> = {
   locations: [
     ['us', 'United States'], ['europe', 'Europe'], ['india', 'India'], ['apac', 'Asia-Pacific'],
     ['canada', 'Canada'], ['latam', 'Latin America'], ['mena', 'Middle East & Africa'], ['other', 'Other'],
@@ -159,10 +95,10 @@ function FilterFields({ facets, draft, setDraft, onApply }: {
   onApply: () => void
 }) {
   const patch = (p: Partial<Draft>) => setDraft({ ...draft, ...p })
-  const locations = facets.locations.length ? facets.locations : FALLBACK.locations
-  const levels = facets.levels.length ? facets.levels : FALLBACK.levels
-  const workplaces = facets.workplaces.length ? facets.workplaces : FALLBACK.workplaces
-  const types = facets.types.length ? facets.types : FALLBACK.types
+  const locations = facets.locations.length ? facets.locations : FILTER_FALLBACK.locations
+  const levels = facets.levels.length ? facets.levels : FILTER_FALLBACK.levels
+  const workplaces = facets.workplaces.length ? facets.workplaces : FILTER_FALLBACK.workplaces
+  const types = facets.types.length ? facets.types : FILTER_FALLBACK.types
 
   const toggleType = (slug: string) =>
     patch({ types: draft.types.includes(slug) ? draft.types.filter(t => t !== slug) : [...draft.types, slug] })

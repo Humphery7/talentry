@@ -6,7 +6,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
-from services import ai_keys
+from services import ai_keys, job_filters
 from services.ranking import FINAL_LIMIT, rank_candidates
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ CROSS JOIN LATERAL (
          jobs.embedding <=> p.profile_embedding AS distance
   FROM jobs
   WHERE jobs.status = 'open' AND jobs.embedding IS NOT NULL
+    {filters}
   ORDER BY jobs.embedding <=> p.profile_embedding
   LIMIT %s
 ) j
@@ -52,6 +53,17 @@ JOIN jobs j ON j.id = r.job_id
 LEFT JOIN companies c ON c.slug = j.company_slug
 WHERE r.user_id = %s
 ORDER BY r.rank
+"""
+
+UPSERT_FILTERS = """
+INSERT INTO recommendation_filters (user_id, filters, updated_at)
+VALUES (%s, %s::jsonb, now())
+ON CONFLICT (user_id) DO UPDATE
+  SET filters = EXCLUDED.filters, updated_at = now()
+"""
+
+LOAD_FILTERS = """
+SELECT filters FROM recommendation_filters WHERE user_id = %s
 """
 
 
@@ -126,10 +138,43 @@ def _fill(ranked: list[dict[str, Any]], candidates: list[dict[str, Any]]) -> lis
     return ranked
 
 
-def _candidates(conn: psycopg.Connection, user_id: UUID) -> list[dict[str, Any]]:
+def _candidates(
+    conn: psycopg.Connection,
+    user_id: UUID,
+    filters: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    # Resolve region slugs to exact location strings once; the regex fallback is
+    # only used if the index cannot be built.
+    region_locations: dict[str, list[str]] | None = None
+    all_locations: list[str] | None = None
+    if filters and filters.get("loc"):
+        try:
+            region_locations, all_locations = job_filters.location_index(conn)
+        except Exception:
+            logger.exception("Could not build the location index; using regex")
+
+    conditions, filter_params = job_filters.build_where(
+        filters, region_locations, all_locations
+    )
+    sql = CANDIDATES.replace(
+        "{filters}", f"AND {conditions}" if conditions else ""
+    )
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(CANDIDATES, (TOP_N, user_id))
+        cur.execute(sql, (*filter_params, TOP_N, user_id))
         return [_to_candidate(row) for row in cur.fetchall()]
+
+
+def save_filters(
+    conn: psycopg.Connection, user_id: UUID, filters: dict[str, Any]
+) -> None:
+    conn.execute(UPSERT_FILTERS, (user_id, json.dumps(filters)))
+
+
+def load_filters(conn: psycopg.Connection, user_id: UUID) -> dict[str, Any]:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(LOAD_FILTERS, (user_id,))
+        row = cur.fetchone()
+    return job_filters.normalize((row or {}).get("filters"))
 
 
 def _save(
@@ -167,7 +212,16 @@ def refresh_recommendations(
     conn: psycopg.Connection,
     user_id: UUID | None = None,
     api_key: str | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> int:
+    # A user-triggered refresh may carry new filters; saving them first means a
+    # crash during ranking still leaves the choice remembered for next time.
+    # `None` means "keep whatever is saved", `{}` means "clear the filters".
+    saved: dict[str, Any] | None = None
+    if user_id is not None and filters is not None:
+        saved = job_filters.normalize(filters)
+        save_filters(conn, user_id, saved)
+
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(PROFILES, (user_id, user_id))
         profiles = cur.fetchall()
@@ -175,7 +229,8 @@ def refresh_recommendations(
     total = 0
     for profile in profiles:
         owner = profile["user_id"]
-        candidates = _candidates(conn, owner)
+        user_filters = saved if saved is not None else load_filters(conn, owner)
+        candidates = _candidates(conn, owner, user_filters)
         if not candidates:
             _save(conn, owner, [])
             continue
@@ -193,7 +248,10 @@ def refresh_recommendations(
             continue
 
         ranked = rank_candidates(
-            _build_profile_text(profile), candidates, api_key=key
+            _build_profile_text(profile),
+            candidates,
+            api_key=key,
+            scope=job_filters.describe(user_filters),
         )
         if ranked is None:
             logger.warning("Falling back to similarity for user %s", owner)

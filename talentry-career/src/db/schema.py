@@ -23,6 +23,16 @@ CREATE INDEX IF NOT EXISTS idx_job_recommendations_user_rank
   ON job_recommendations (user_id, rank)
 """
 
+# The coach page's saved filters. Applied before the embedding search, so both
+# the similarity step and the LLM ranking only see eligible jobs.
+CREATE_RECOMMENDATION_FILTERS = """
+CREATE TABLE IF NOT EXISTS recommendation_filters (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
 # Interview prep. The Express backend creates the same tables so it can read
 # them; both use IF NOT EXISTS and this service is the writer.
 CREATE_INTERVIEW_ATTEMPTS = """
@@ -228,6 +238,7 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     conn.execute(CREATE_TABLE)
     conn.execute(ADD_COLUMNS)
     conn.execute(CREATE_INDEX)
+    conn.execute(CREATE_RECOMMENDATION_FILTERS)
     conn.execute(CREATE_INTERVIEW_ATTEMPTS)
     conn.execute(CREATE_INTERVIEW_RESPONSES)
     conn.execute(CREATE_INTERVIEW_INDEXES)

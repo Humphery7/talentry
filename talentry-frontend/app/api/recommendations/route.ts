@@ -3,9 +3,15 @@ import { NextResponse } from 'next/server'
 const API = process.env.API_URL ?? 'http://localhost:3001'
 
 async function forward(req: Request, method: 'GET' | 'POST', path: string) {
+  // The refresh body may carry the filters to save; forward it untouched.
+  const body = method === 'POST' ? await req.text() : undefined
   const r = await fetch(`${API}${path}`, {
     method,
-    headers: { Authorization: req.headers.get('authorization') ?? '' },
+    headers: {
+      Authorization: req.headers.get('authorization') ?? '',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body || undefined,
     cache: 'no-store',
   })
   const data = await r.json().catch(() => null)

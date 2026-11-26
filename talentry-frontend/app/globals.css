@@ -92,6 +92,8 @@ select.f{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='
 .fgrid .spanall,.fgrid .salwrap{grid-column:1/-1}
 .fgrid .salwrap{max-width:520px}
 .fgrid .f{margin-bottom:16px}
+/* A picker with chips grows taller than its row; keep the next labels clear. */
+.fgrid .rolepick{margin-bottom:10px}.fgrid .rolechips{margin-top:8px;margin-bottom:2px}
 /* apply bar at the bottom of the filter panel */
 .filterapply{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:18px;margin-top:6px}
 .filterapply .fhint{font-size:13px;color:var(--mute)}
