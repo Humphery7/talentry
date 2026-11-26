@@ -1,8 +1,6 @@
 # Talentry
 
-> **Status: local development only.** Talentry is not deployed. There is no
-> hosted demo and no public API. To use it, clone the repo and run the services
-> on your machine against a Postgres database.
+> **Status: complete deployment.** Talentry is fully deployed and available to use
 
 Talentry is a job board plus an auto-apply assistant. We crawl company career
 pages, turn the listings into something searchable, and put a site on top of it.

@@ -317,10 +317,20 @@ export async function list(q: JobsQuery) {
     }
   }
   const { sql, params } = buildWhere(q, regionLocs);
+  // "Newest" means the employer's posting date. `last_seen_at` is bumped for
+  // every job on every crawl, so ordering by it puts evergreen roles first no
+  // matter how old the posting is. `pg_input_is_valid` keeps one malformed
+  // date from breaking the whole list with a cast error.
+  const postedAt = `(CASE
+    WHEN pg_input_is_valid(j.date_posted, 'timestamptz')
+      THEN j.date_posted::timestamptz
+  END)`;
   const order =
     q.sort === 'oldest'
-      ? 'ORDER BY j.last_seen_at ASC'
-      : 'ORDER BY j.last_seen_at DESC';
+      ? `ORDER BY ${postedAt} ASC NULLS LAST, j.last_seen_at ASC`
+      : q.sort === 'recent'
+        ? 'ORDER BY j.last_seen_at DESC'
+        : `ORDER BY ${postedAt} DESC NULLS LAST, j.last_seen_at DESC`;
 
   const counted = await pool.query(
     `SELECT COUNT(*)::int AS total FROM jobs j LEFT JOIN companies c ON c.slug = j.company_slug ${sql}`,
