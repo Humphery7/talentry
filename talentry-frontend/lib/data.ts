@@ -1,7 +1,17 @@
 // UI job shape + URL query parsing. Data itself comes from the backend
 // (see lib/api.ts) — no mock rows here anymore.
 export type Job = { id: number; url: string; co: string; bg: string; ch: string; logo?: string | null; date: string; title: string; tags: string[]; min: number; max: number; loc: string; ind: string }
-export interface RoleFacet { slug: string; label: string; count: number }
+export interface Facet { slug: string; label: string; count: number }
+/** Roles are labelled from their slug, so the API only has to send the slug. */
+export type RoleFacet = Facet
+export interface JobFacets {
+  roles: Facet[]
+  locations: Facet[]
+  levels: Facet[]
+  industries: Facet[]
+  workplaces: Facet[]
+  types: Facet[]
+}
 
 /* ── Company-grouped jobs ───────────────────────────── */
 
@@ -47,8 +57,30 @@ export function roleLabel(slug: string): string {
     .map(w => (ACRONYMS.has(w) ? w.toUpperCase() : w[0]!.toUpperCase() + w.slice(1)))
     .join(' ')
 }
-export type JobQuery = { q?: string; loc?: string; lvl?: string; typ?: string; ind?: string; sch?: string; co?: string; lo?: number; hi?: number; types?: string[]; roles?: string[]; sort?: string; ids?: number[]; page?: number }
+export type JobQuery = {
+  q?: string
+  /** Comma-separated lists in the URL; the API client joins arrays back. */
+  loc?: string[]
+  lvl?: string[]
+  typ?: string
+  ind?: string[]
+  sch?: string[]
+  co?: string
+  lo?: number
+  hi?: number
+  types?: string[]
+  roles?: string[]
+  sort?: string
+  ids?: number[]
+  page?: number
+}
 export function parseQuery(sp: Record<string, string | string[] | undefined>): JobQuery {
   const g = (k: string) => { const v = sp[k]; return (Array.isArray(v) ? v[0] : v) || undefined }
-  return { q: g('q'), loc: g('loc'), lvl: g('lvl'), typ: g('typ'), ind: g('ind'), sch: g('sch'), co: g('co'), sort: g('sort'), lo: g('lo') ? +g('lo')! : undefined, hi: g('hi') ? +g('hi')! : undefined, types: g('types')?.split(','), roles: g('roles')?.split(',').filter(Boolean), ids: g('ids')?.split(',').map(Number), page: g('page') ? Math.max(1, +g('page')!) : 1 }
+  const list = (k: string) => g(k)?.split(',').map(s => s.trim()).filter(Boolean)
+  return {
+    q: g('q'), loc: list('loc'), lvl: list('lvl'), typ: g('typ'), ind: list('ind'), sch: list('sch'),
+    co: g('co'), sort: g('sort'), lo: g('lo') ? +g('lo')! : undefined, hi: g('hi') ? +g('hi')! : undefined,
+    types: list('types'), roles: list('roles'), ids: g('ids')?.split(',').map(Number),
+    page: g('page') ? Math.max(1, +g('page')!) : 1,
+  }
 }

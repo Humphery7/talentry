@@ -1,6 +1,6 @@
 // The single seam between UI and backend. Server pages call these;
 // they fetch the NestJS API (API_URL server-side, default localhost:3001).
-import { roleLabel, type Job, type JobQuery, type RoleFacet } from './data'
+import { roleLabel, type Facet, type Job, type JobFacets, type JobQuery } from './data'
 
 const API_BASE = process.env.API_URL ?? 'http://localhost:3001'
 
@@ -94,16 +94,18 @@ export async function getJobs(q: JobQuery): Promise<{ jobs: Job[]; total: number
   return { jobs: (d.data as BackendJob[]).map(mapJob), total: d.meta.total, pages: d.meta.pages }
 }
 
-/** Open-job counts per occupation, straight from the crawler's labels. */
-export async function getRoleFacets(): Promise<RoleFacet[]> {
+/** Counts for every filter menu, straight from the crawler's labels. */
+export async function getJobFacets(): Promise<JobFacets> {
+  const empty: JobFacets = { roles: [], locations: [], levels: [], industries: [], workplaces: [], types: [] }
   try {
     // Counts change slowly; avoid re-running the GROUP BY on every page view.
     const r = await fetch(`${API_BASE}/jobs/facets`, { next: { revalidate: 60 } })
-    if (!r.ok) return []
-    const d = (await r.json()) as { roles?: Array<{ slug: string; count: number }> }
-    return (d.roles ?? []).map(role => ({ ...role, label: roleLabel(role.slug) }))
+    if (!r.ok) return empty
+    const d = (await r.json()) as Partial<Record<keyof JobFacets, Facet[]>>
+    const roles = (d.roles ?? []).map(role => ({ ...role, label: role.label ?? roleLabel(role.slug) }))
+    return { ...empty, ...d, roles }
   } catch {
-    return []
+    return empty
   }
 }
 

@@ -92,6 +92,12 @@ select.f{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='
 .fgrid .spanall,.fgrid .salwrap{grid-column:1/-1}
 .fgrid .salwrap{max-width:520px}
 .fgrid .f{margin-bottom:16px}
+/* apply bar at the bottom of the filter panel */
+.filterapply{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:18px;margin-top:6px}
+.filterapply .fhint{font-size:13px;color:var(--mute)}
+.filterapply .factions{display:flex;align-items:center;gap:18px}
+.filterapply .btn{width:auto;height:46px;padding:0 26px;font-size:13px}
+.filterapply .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
 /* account menu */
 .account{position:relative}
 .usermenu{position:absolute;right:0;top:calc(100% + 10px);z-index:40;min-width:220px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:8px;box-shadow:0 24px 60px rgba(0,0,0,.28);animation:dlg .22s var(--ease)}

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { getJobs, getRoleFacets } from '@/lib/api'
+import { getJobs, getJobFacets } from '@/lib/api'
 import { parseQuery, groupJobsByCompany } from '@/lib/data'
 import CompanyJobGroup from '@/components/CompanyJobGroup'
 import { FilterPanel } from '@/components/Filters'
@@ -16,9 +16,9 @@ export default async function Jobs({
   const q      = parseQuery(sp)
   const page   = q.page ?? 1
 
-  const [{ jobs, total, pages }, roles] = await Promise.all([
+  const [{ jobs, total, pages }, facets] = await Promise.all([
     getJobs(q),
-    getRoleFacets(),
+    getJobFacets(),
   ])
 
   /* Group the flat job list by company for the card-per-company layout. */
@@ -45,7 +45,7 @@ export default async function Jobs({
         </span>
       </div>
 
-      <FilterPanel roles={roles} />
+      <FilterPanel facets={facets} />
 
       {/* Company-grouped results */}
       <main className="company-list" id="results" aria-live="polite">

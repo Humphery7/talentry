@@ -1,6 +1,12 @@
 import { pool } from '../db/pool.js';
 import { HttpError } from '../utils/http-error.js';
 import type { JobsQuery } from '../validators/jobs.validator.js';
+import {
+  ALL_LOCATION_REGEX,
+  REGION_BY_SLUG,
+  REGION_REGEXES,
+  WORKPLACE_LOCATION_PATTERNS,
+} from './job-locations.js';
 
 const SELECT = `
   SELECT j.id, j.url, j.company_slug AS "companySlug", j.board_slug AS "boardSlug",
@@ -46,7 +52,17 @@ const SAL_MAX = salaryExpr(
 );
 
 /** 'Full time' and 'FullTime' should match the same rows. */
-const normType = (t: string) => t.toLowerCase().replace(/[\s_-]+/g, '');
+const normType = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+/** Workplace values ("OnSite", "on-site") and the filter share one spelling. */
+const normWorkplace = (w: string) => w.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+/** The filter sends comma-separated lists; older links send one value. */
+const listOf = (raw?: string): string[] =>
+  (raw ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
 
 function parseJsonArray(raw: unknown): string[] {
   if (!raw) return [];
@@ -68,7 +84,47 @@ function parseJson(raw: unknown): unknown {
 }
 
 /** Builds WHERE + params. Shared by the page query and the count query. */
-function buildWhere(q: JobsQuery): { sql: string; params: unknown[] } {
+/**
+ * Region slug -> the exact location strings that belong to it. Built once from
+ * the distinct locations in the table, then reused: matching 4,500 strings by
+ * equality is far cheaper than running a regex against 140,000 of them.
+ */
+let locationIndex: { at: number; byRegion: Map<string, string[]> } | null = null;
+
+async function getLocationIndex(): Promise<Map<string, string[]>> {
+  if (locationIndex && Date.now() - locationIndex.at < FACET_TTL_MS) {
+    return locationIndex.byRegion;
+  }
+  const { rows } = await pool.query(
+    `WITH open_locs AS MATERIALIZED (
+       SELECT DISTINCT loc.loc
+       FROM jobs j
+       CROSS JOIN LATERAL jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+       WHERE j.status = 'open' AND j.locations_json IS NOT NULL
+     )
+     SELECT DISTINCT l.loc, p.slug
+     FROM open_locs l
+     JOIN unnest($1::text[], $2::text[]) AS p(slug, pattern)
+       ON l.loc ~* p.pattern`,
+    [
+      REGION_REGEXES.map((r) => r.slug),
+      REGION_REGEXES.map((r) => r.pattern),
+    ],
+  );
+  const byRegion = new Map<string, string[]>(
+    REGION_REGEXES.map((r) => [r.slug, []]),
+  );
+  for (const row of rows as Array<{ loc: string; slug: string }>) {
+    byRegion.get(row.slug)?.push(row.loc);
+  }
+  locationIndex = { at: Date.now(), byRegion };
+  return byRegion;
+}
+
+function buildWhere(
+  q: JobsQuery,
+  regionLocs?: Map<string, string[]>,
+): { sql: string; params: unknown[] } {
   const conds: string[] = [];
   const params: unknown[] = [];
   // Postgres placeholders are 1-based ($1, $2, ...): each push mints the next one.
@@ -86,47 +142,109 @@ function buildWhere(q: JobsQuery): { sql: string; params: unknown[] } {
       `(c.slug = ${p(q.co.trim())} OR c.name ILIKE ${p(`%${q.co.trim()}%`)})`,
     );
   }
-  if (q.ind?.trim()) conds.push(`c.industry ILIKE ${p(`%${q.ind.trim()}%`)}`);
+  if (q.ind?.trim()) {
+    const industries = listOf(q.ind).map((v) => `%${v}%`);
+    if (industries.length) conds.push(`c.industry ILIKE ANY(${p(industries)})`);
+  }
   if (q.loc?.trim()) {
-    conds.push(
-      `j.locations_json IS NOT NULL AND EXISTS (
-         SELECT 1 FROM jsonb_array_elements_text((j.locations_json)::jsonb) AS loc
-         WHERE loc ILIKE ${p(`%${q.loc.trim()}%`)}
-       )`,
-    );
+    // Region slugs ("us", "europe") match a group of patterns; anything else
+    // is treated as free text so old links like `loc=Berlin` keep working.
+    const regexes: string[] = [];
+    const likes: string[] = [];
+    const exact: string[] = [];
+    let wantsOther = false;
+    for (const value of listOf(q.loc)) {
+      const key = value.toLowerCase();
+      if (key === 'other') wantsOther = true;
+      else {
+        const region = REGION_BY_SLUG[key];
+        const known = regionLocs?.get(key);
+        if (known?.length) exact.push(...known);
+        else if (region) regexes.push(region.pattern);
+        else likes.push(`%${value}%`);
+      }
+    }
+    const parts: string[] = [];
+    if (exact.length) {
+      parts.push(
+        `EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+           WHERE loc.loc = ANY(${p(exact)})
+         )`,
+      );
+    }
+    if (regexes.length) {
+      parts.push(
+        `EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+           WHERE loc.loc ~* ANY(${p(regexes)})
+         )`,
+      );
+    }
+    if (likes.length) {
+      parts.push(
+        `EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+           WHERE loc.loc ILIKE ANY(${p(likes)})
+         )`,
+      );
+    }
+    if (wantsOther) {
+      parts.push(
+        `NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+           WHERE loc.loc ~* ${p(ALL_LOCATION_REGEX)}
+         )`,
+      );
+    }
+    if (parts.length) {
+      conds.push(`j.locations_json IS NOT NULL AND (${parts.join(' OR ')})`);
+    }
   }
   if (q.lvl?.trim()) {
-    const levels = LEVEL_MAP[q.lvl.trim().toLowerCase()] ?? [
-      q.lvl.trim().toLowerCase(),
-    ];
-    conds.push(`lower(j.seniority) = ANY(${p(levels)})`);
+    const levels = listOf(q.lvl).flatMap(
+      (value) => LEVEL_MAP[value.toLowerCase()] ?? [value.toLowerCase()],
+    );
+    if (levels.length) conds.push(`lower(j.seniority) = ANY(${p(levels)})`);
   }
   if (q.roles?.trim()) {
-    const roles = q.roles
-      .split(',')
-      .map((r) => r.trim().toLowerCase())
-      .filter(Boolean);
+    const roles = listOf(q.roles).map((r) => r.toLowerCase());
     if (roles.length) conds.push(`lower(j.occupation) = ANY(${p(roles)})`);
   }
   const typeList = [
     ...(q.typ?.trim() ? [q.typ.trim()] : []),
-    ...(q.types
-      ? q.types
-          .split(',')
-          .map((t) => t.trim())
-          .filter(Boolean)
-      : []),
+    ...listOf(q.types),
   ];
   if (typeList.length) {
+    // Contains, not equality, so "Internship" also finds "Internship/Co-op".
     conds.push(
-      `replace(lower(COALESCE(j.employment_type, '')), ' ', '') = ANY(${p(typeList.map(normType))})`,
+      `regexp_replace(lower(COALESCE(j.employment_type, '')), '[^a-z0-9]+', '', 'g')
+         LIKE ANY(${p(typeList.map((t) => `%${normType(t)}%`))})`,
     );
   }
   if (q.sch?.trim()) {
-    const like = `%${q.sch.trim()}%`;
-    conds.push(
-      `(j.workplace_type ILIKE ${p(like)} OR j.employment_type ILIKE ${p(like)} OR j.description ILIKE ${p(like)})`,
+    // "Workplace": remote / hybrid / onsite. Workplace type is often missing,
+    // so the location text is used as a fallback ("Remote", "San Mateo Hybrid").
+    const workplaces = listOf(q.sch).map(normWorkplace);
+    const ors: string[] = [];
+    if (workplaces.length) {
+      ors.push(
+        `regexp_replace(lower(COALESCE(j.workplace_type, '')), '[^a-z0-9]+', '', 'g')
+           = ANY(${p(workplaces)})`,
+      );
+    }
+    const locationPatterns = workplaces.flatMap(
+      (w) => WORKPLACE_LOCATION_PATTERNS[w] ?? [],
     );
+    if (locationPatterns.length) {
+      ors.push(
+        `EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+           WHERE loc.loc ILIKE ANY(${p(locationPatterns)})
+         )`,
+      );
+    }
+    if (ors.length) conds.push(`(${ors.join(' OR ')})`);
   }
   // Salary data is sparse (all NULL in the current crawl): NULL salaries pass
   // the range instead of vanishing. Extracts {min,max}-style JSON when present.
@@ -188,7 +306,17 @@ function mapRow(r: Record<string, unknown>) {
 export async function list(q: JobsQuery) {
   const page = q.page ?? 1;
   const limit = q.limit ?? 20;
-  const { sql, params } = buildWhere(q);
+  // Region filters are resolved against the cached location index so the query
+  // compares strings instead of running a regex over every job.
+  let regionLocs: Map<string, string[]> | undefined;
+  if (q.loc?.trim()) {
+    try {
+      regionLocs = await getLocationIndex();
+    } catch {
+      regionLocs = undefined; // fall back to the regex path
+    }
+  }
+  const { sql, params } = buildWhere(q, regionLocs);
   const order =
     q.sort === 'oldest'
       ? 'ORDER BY j.last_seen_at ASC'
@@ -210,9 +338,41 @@ export async function list(q: JobsQuery) {
   };
 }
 
-/** Open-job counts per occupation, for the role picker. */
-export async function facets() {
-  const { rows } = await pool.query(
+/** Facet counts change slowly and cost a full scan, so keep them for a while. */
+const FACET_TTL_MS = 10 * 60 * 1000;
+let facetCache: { at: number; data: Facets } | null = null;
+
+export interface Facets {
+  roles: Array<{ slug: string; count: number }>;
+  locations: Array<{ slug: string; label: string; count: number }>;
+  industries: Array<{ slug: string; label: string; count: number }>;
+  levels: Array<{ slug: string; label: string; count: number }>;
+  workplaces: Array<{ slug: string; label: string; count: number }>;
+  types: Array<{ slug: string; label: string; count: number }>;
+}
+
+/**
+ * Counts for every filter menu.
+ *
+ * Locations are grouped into regions, and the counts overlap on purpose: a job
+ * that is both "Remote" and "United States" counts in both, and a job listing
+ * three US cities still counts once for the United States.
+ *
+ * The query classifies the *distinct* location strings first (about 10k), then
+ * joins them back to jobs. Running the regex against all 140k location values
+ * instead takes minutes, not milliseconds.
+ */
+export async function facets(): Promise<Facets> {
+  if (facetCache && Date.now() - facetCache.at < FACET_TTL_MS) {
+    return facetCache.data;
+  }
+
+  const regionSlugs = REGION_REGEXES.map((r) => r.slug);
+  const regionPatterns = REGION_REGEXES.map((r) => r.pattern);
+
+  // Sequential on purpose: the pool allows five connections and these scans are
+  // heavy. Parallelising them just makes every request queue for a connection.
+  const roles = await pool.query(
     `SELECT j.occupation AS slug, COUNT(*)::int AS count
      FROM jobs j
      WHERE j.status = 'open'
@@ -221,7 +381,141 @@ export async function facets() {
      GROUP BY j.occupation
      ORDER BY COUNT(*) DESC, j.occupation ASC`,
   );
-  return { roles: rows as Array<{ slug: string; count: number }> };
+
+  const locations = await pool.query(
+    `WITH open_locs AS MATERIALIZED (
+       SELECT DISTINCT loc.loc
+       FROM jobs j
+       CROSS JOIN LATERAL jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+       WHERE j.status = 'open' AND j.locations_json IS NOT NULL
+     ),
+     classified AS MATERIALIZED (
+       SELECT DISTINCT l.loc, p.slug
+       FROM open_locs l
+       JOIN unnest($1::text[], $2::text[]) AS p(slug, pattern)
+         ON l.loc ~* p.pattern
+     ),
+     job_regions AS MATERIALIZED (
+       SELECT DISTINCT j.id, c.slug
+       FROM jobs j
+       CROSS JOIN LATERAL jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+       JOIN classified c ON c.loc = loc.loc
+       WHERE j.status = 'open'
+     )
+     SELECT slug, COUNT(*)::int AS count
+     FROM job_regions
+     GROUP BY slug`,
+    [regionSlugs, regionPatterns],
+  );
+
+  const industries = await pool.query(
+    `SELECT c.industry AS label, COUNT(*)::int AS count
+     FROM jobs j
+     JOIN companies c ON c.slug = j.company_slug
+     WHERE j.status = 'open'
+       AND c.industry IS NOT NULL
+       AND c.industry <> ''
+     GROUP BY c.industry
+     ORDER BY COUNT(*) DESC, c.industry ASC`,
+  );
+
+  const levels = await pool.query(
+    `SELECT level AS label, COUNT(*)::int AS count
+     FROM (
+       SELECT CASE
+         WHEN lower(j.seniority) IN ('entry', 'junior') THEN 'Junior level'
+         WHEN lower(j.seniority) = 'mid' THEN 'Mid level'
+         WHEN lower(j.seniority) IN ('senior', 'staff', 'principal', 'director', 'lead', 'executive')
+           THEN 'Senior level'
+       END AS level
+       FROM jobs j
+       WHERE j.status = 'open'
+     ) t
+     WHERE level IS NOT NULL
+     GROUP BY level
+     ORDER BY count DESC`,
+  );
+
+  const WORKPLACE_LABELS: Record<string, string> = {
+    remote: 'Remote',
+    hybrid: 'Hybrid',
+    onsite: 'On-site',
+  };
+  const workplaceRows: Array<{ slug: string; count: number }> = [];
+  for (const [slug, label] of Object.entries(WORKPLACE_LABELS)) {
+    const patterns = WORKPLACE_LOCATION_PATTERNS[slug] ?? [];
+    const row = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM jobs j
+       WHERE j.status = 'open'
+         AND (
+           regexp_replace(lower(COALESCE(j.workplace_type, '')), '[^a-z0-9]+', '', 'g') = $1
+           OR EXISTS (
+             SELECT 1 FROM jsonb_array_elements_text((j.locations_json)::jsonb) AS loc(loc)
+             WHERE loc.loc ILIKE ANY($2::text[])
+           )
+         )`,
+      [slug, patterns],
+    );
+    workplaceRows.push({ slug, count: Number(row.rows[0]?.count ?? 0) });
+  }
+
+  const types = await pool.query(
+    `SELECT regexp_replace(lower(COALESCE(j.employment_type, '')), '[^a-z0-9]+', '', 'g') AS slug,
+            COUNT(*)::int AS count
+     FROM jobs j
+     WHERE j.status = 'open'
+       AND j.employment_type IS NOT NULL
+       AND j.employment_type <> ''
+     GROUP BY 1
+     ORDER BY count DESC`,
+  );
+
+  const locationCounts = new Map<string, number>(
+    (locations.rows as Array<{ slug: string; count: number }>).map((r) => [
+      r.slug,
+      r.count,
+    ]),
+  );
+
+  const TYPE_LABELS: Record<string, string> = {
+    fulltime: 'Full time',
+    parttime: 'Part time',
+    contract: 'Contract',
+    internshipcoop: 'Internship',
+    employeepermanent: 'Permanent',
+    temporary: 'Temporary',
+    freelance: 'Freelance',
+  };
+  const data: Facets = {
+    roles: roles.rows as Array<{ slug: string; count: number }>,
+    locations: REGION_REGEXES.map((r) => ({
+      slug: r.slug,
+      label: r.label,
+      count: locationCounts.get(r.slug) ?? 0,
+    })).filter((r) => r.count > 0),
+    industries: (industries.rows as Array<{ label: string; count: number }>).map(
+      (r) => ({ slug: r.label, label: r.label, count: r.count }),
+    ),
+    levels: (levels.rows as Array<{ label: string; count: number }>).map((r) => ({
+      slug: r.label,
+      label: r.label,
+      count: r.count,
+    })),
+    workplaces: workplaceRows
+      .filter((r) => r.count > 0)
+      .map((r) => ({
+        slug: r.slug,
+        label: WORKPLACE_LABELS[r.slug]!,
+        count: r.count,
+      })),
+    types: (types.rows as Array<{ slug: string; count: number }>)
+      .filter((r) => TYPE_LABELS[r.slug])
+      .map((r) => ({ slug: r.slug, label: TYPE_LABELS[r.slug]!, count: r.count })),
+  };
+
+  facetCache = { at: Date.now(), data };
+  return data;
 }
 
 export async function getOne(id: number) {

@@ -10,12 +10,16 @@ import {
 /** Mirrors the frontend URL params (q, loc, lvl, typ, ind, sch, co, lo, hi, types, roles, sort, ids) + paging. */
 export interface JobsQuery {
   q?: string;
+  /** Comma-separated region slugs (`us,europe`) or free text (`Berlin`). */
   loc?: string;
+  /** Comma-separated experience labels (`Junior level,Mid level`). */
   lvl?: string;
   typ?: string;
   /** Comma-separated occupation slugs, e.g. `roles=frontend-developer,backend-developer`. */
   roles?: string;
+  /** Comma-separated industry names, e.g. `ind=Technology,Cybersecurity`. */
   ind?: string;
+  /** Comma-separated workplaces (`remote,hybrid,onsite`). */
   sch?: string;
   co?: string;
   /** Salary floor/ceiling in thousands, e.g. 35 means $35K. */
