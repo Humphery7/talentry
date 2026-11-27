@@ -319,8 +319,10 @@ export async function list(q: JobsQuery) {
   const { sql, params } = buildWhere(q, regionLocs);
   // "Newest" means the employer's posting date. `last_seen_at` is bumped for
   // every job on every crawl, so ordering by it puts evergreen roles first no
-  // matter how old the posting is. `pg_input_is_valid` keeps one malformed
-  // date from breaking the whole list with a cast error.
+  // matter how old the posting is. A job whose board publishes no date has no
+  // place on a newest-first page; it sorts last and is still reachable through
+  // filters and the "Recently confirmed" view. `pg_input_is_valid` keeps one
+  // malformed date from breaking the whole list.
   const postedAt = `(CASE
     WHEN pg_input_is_valid(j.date_posted, 'timestamptz')
       THEN j.date_posted::timestamptz

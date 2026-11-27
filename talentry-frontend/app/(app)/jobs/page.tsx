@@ -34,6 +34,19 @@ export default async function Jobs({
     return `/jobs?${params}`
   }
 
+  /** Same filters, different ordering. `undefined` restores the default. */
+  const sortHref = (sort?: string) => {
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(sp)) {
+      if (k === 'page' || k === 'sort' || v === undefined) continue
+      params.set(k, Array.isArray(v) ? v[0] ?? '' : v)
+    }
+    if (sort) params.set('sort', sort)
+    const query = params.toString()
+    return query ? `/jobs?${query}` : '/jobs'
+  }
+  const ordering = q.sort === 'recent' ? 'recent' : 'newest'
+
   return (
     <>
       <h1>Find your next role</h1>
@@ -42,6 +55,18 @@ export default async function Jobs({
         <span>
           {total} open role{total === 1 ? '' : 's'} found
           {total > jobs.length ? ` · page ${page} of ${pages}` : ''}
+        </span>
+        <span className="sortpick" aria-label="Sort jobs">
+          <Link href={sortHref()} aria-current={ordering === 'newest' ? 'true' : undefined}>
+            Newest
+          </Link>
+          <Link
+            href={sortHref('recent')}
+            aria-current={ordering === 'recent' ? 'true' : undefined}
+            title="Jobs the crawler confirmed most recently, regardless of posting date"
+          >
+            Recently confirmed
+          </Link>
         </span>
       </div>
 
