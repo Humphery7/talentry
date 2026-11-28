@@ -66,6 +66,10 @@ LOAD_FILTERS = """
 SELECT filters FROM recommendation_filters WHERE user_id = %s
 """
 
+PREVIOUS = """
+SELECT job_id FROM job_recommendations WHERE user_id = %s
+"""
+
 
 def _json_array(value: Any) -> list[str]:
     if not value:
@@ -138,10 +142,17 @@ def _fill(ranked: list[dict[str, Any]], candidates: list[dict[str, Any]]) -> lis
     return ranked
 
 
+def _previous_job_ids(conn: psycopg.Connection, user_id: UUID) -> list[int]:
+    with conn.cursor() as cur:
+        cur.execute(PREVIOUS, (user_id,))
+        return [int(row[0]) for row in cur.fetchall()]
+
+
 def _candidates(
     conn: psycopg.Connection,
     user_id: UUID,
     filters: dict[str, Any] | None = None,
+    exclude: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     # Resolve region slugs to exact location strings once; the regex fallback is
     # only used if the index cannot be built.
@@ -153,14 +164,25 @@ def _candidates(
         except Exception:
             logger.exception("Could not build the location index; using regex")
 
-    conditions, filter_params = job_filters.build_where(
+    conditions, params = job_filters.build_where(
         filters, region_locations, all_locations
     )
+    params = list(params)
+    # A refresh should offer something new, not the same ten jobs. Excluding
+    # the previous list moves the similarity window down by one page; when the
+    # eligible pool is small the caller tops it back up without this clause.
+    if exclude:
+        conditions = (
+            f"{conditions} AND jobs.id <> ALL(%s)"
+            if conditions
+            else "jobs.id <> ALL(%s)"
+        )
+        params.append(exclude)
     sql = CANDIDATES.replace(
         "{filters}", f"AND {conditions}" if conditions else ""
     )
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql, (*filter_params, TOP_N, user_id))
+        cur.execute(sql, (*params, TOP_N, user_id))
         return [_to_candidate(row) for row in cur.fetchall()]
 
 
@@ -226,11 +248,27 @@ def refresh_recommendations(
         cur.execute(PROFILES, (user_id, user_id))
         profiles = cur.fetchall()
 
+    # A person pressing Refresh expects to see something new, so skip the jobs
+    # they just saw. The scheduled all-users sweep re-ranks the best current
+    # jobs instead, so it does not walk everyone down the similarity list.
+    explore = user_id is not None
+
     total = 0
     for profile in profiles:
         owner = profile["user_id"]
         user_filters = saved if saved is not None else load_filters(conn, owner)
-        candidates = _candidates(conn, owner, user_filters)
+        previous = _previous_job_ids(conn, owner) if explore else []
+        candidates = _candidates(conn, owner, user_filters, exclude=previous)
+        # If the fresh window is too small to fill a list, add the previously
+        # shown jobs back rather than returning a short page.
+        if previous and len(candidates) < FINAL_LIMIT:
+            seen = {candidate["id"] for candidate in candidates}
+            for extra in _candidates(conn, owner, user_filters):
+                if extra["id"] not in seen:
+                    candidates.append(extra)
+                    seen.add(extra["id"])
+                if len(candidates) >= TOP_N:
+                    break
         if not candidates:
             _save(conn, owner, [])
             continue

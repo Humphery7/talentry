@@ -34,12 +34,15 @@ def refresh_user(
 ) -> RefreshResult:
     try:
         api_key = ai_keys.require_key(conn, user_id)
+        # A missing `filters` key means "keep the saved scope" (the plain
+        # Refresh button). An explicit `{}` means "clear the scope". Treating
+        # the missing key as `{}` would silently wipe the user's filters on
+        # every refresh.
         count = refresh_recommendations(
             conn,
             user_id,
             api_key=api_key,
-            # `None` = keep saved filters; `{}` = clear them.
-            filters=None if body is None else (body.filters or {}),
+            filters=None if body is None else body.filters,
         )
     except ai_keys.MissingApiKey as exc:
         raise HTTPException(status_code=428, detail=str(exc)) from exc
