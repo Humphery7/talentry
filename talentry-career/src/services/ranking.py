@@ -3,10 +3,9 @@ import logging
 import re
 from typing import Any
 
-from google import genai
-
 from config.settings import settings
 from services.ai_keys import MissingApiKey
+from services.gemini import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +95,6 @@ def build_prompt(
     )
 
 
-def _client(api_key: str) -> genai.Client:
-    return genai.Client(api_key=api_key)
-
-
 def _normalize(
     payload: Any, candidates: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -150,7 +145,11 @@ def rank_candidates(
         raise MissingApiKey()
 
     try:
-        interaction = _client(api_key).interactions.create(
+        # Reuse the cached client. A temporary `genai.Client(...)` is collected
+        # as soon as `.interactions` is read, and its __del__ closes the HTTP
+        # client mid-request ("Cannot send a request, as the client has been
+        # closed"), silently dropping every ranking to the similarity fallback.
+        interaction = get_client(api_key).interactions.create(
             model=settings.GEMINI_MODEL,
             input=build_prompt(profile_text, candidates, scope),
             system_instruction=SYSTEM_INSTRUCTION,
