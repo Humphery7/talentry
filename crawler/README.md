@@ -53,7 +53,11 @@ Glassdoor, Jooble — rather than one employer's board. It is the only source
 with an API quota, so it is the only one that is budgeted:
 
 * one row in `data/boards.csv` per saved search (`monitor_type=jsearch`,
-  `monitor_config` = `{query, country, language, date_posted, num_pages}`);
+  `monitor_config` = `{query, country | countries, language, date_posted, num_pages}`);
+* **one request searches one country.** `countries` (a list) makes every
+  request pick a different country: the list is shuffled and used without
+  repeats, so one row spreads its credits across several countries instead of
+  pinning one. `country` still pins a single code, and omitting both means US;
 * **one request = one page = up to 10 jobs.** `num_pages` maxes at 20, and
   every page costs a credit, so breadth (more queries) beats depth;
 * the crawler runs daily but JSearch spends credits **once per ISO week**,

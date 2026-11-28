@@ -4,6 +4,10 @@ An aggregator, not an ATS: one search returns up to 10 postings harvested from
 Google for Jobs (LinkedIn, Indeed, Glassdoor, Jooble, ...). So:
 
   * one boards.csv row is one saved search (query + country + window);
+  * `countries` (a list) instead of `country` makes every request search a
+    different country, so one row covers several countries. The list is
+    shuffled and consumed without repeats before it reshuffles, which means a
+    week's requests cover every country before repeating one;
   * `num_pages` stays at 1 — every extra page costs another API credit, and
     breadth (more searches) beats depth (page 20 of the same search);
   * the posting's own employer is carried on the Job, because there is no
@@ -20,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import html
 import os
+import random
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -241,6 +246,45 @@ def _pages(config: dict[str, Any]) -> int:
     return max(1, min(MAX_PAGES, pages))
 
 
+# One request searches one country, so a `countries` list is sampled instead of
+# pinned. Sampling *without* replacement matters: a crawl makes ~45 requests
+# over ~23 countries, and `random.choice` would leave several unsearched every
+# week. A shuffled pool covers the whole list before repeating a country.
+_country_pool: list[str] = []
+_pool_codes: tuple[str, ...] = ()
+
+
+def reset_country_pool() -> None:
+    """Forget the shuffled pool. Only tests need this."""
+    global _country_pool, _pool_codes
+    _country_pool = []
+    _pool_codes = ()
+
+
+def _pick_country(codes: list[str]) -> str:
+    global _country_pool, _pool_codes
+    key = tuple(sorted(codes))
+    if key != _pool_codes or not _country_pool:
+        _pool_codes = key
+        _country_pool = random.sample(codes, len(codes))
+    return _country_pool.pop(0)
+
+
+def _country(config: dict[str, Any]) -> str:
+    """The country code for one request.
+
+    `countries` spreads a saved search over several countries, one per request.
+    A single `country` keeps working, and a missing value still means "us" so
+    old rows behave exactly as before.
+    """
+    options = config.get("countries")
+    if isinstance(options, list):
+        codes = [code.lower() for code in (_text(option) for option in options) if code]
+        if codes:
+            return _pick_country(codes)
+    return (_text(config.get("country")) or "us").lower()
+
+
 async def discover(board: Board, client: httpx.AsyncClient) -> list[Job]:
     config = board.monitor_config
     query = _text(config.get("query"))
@@ -250,7 +294,7 @@ async def discover(board: Board, client: httpx.AsyncClient) -> list[Job]:
     params: dict[str, Any] = {
         "query": query,
         "num_pages": _pages(config),
-        "country": _text(config.get("country")) or "us",
+        "country": _country(config),
     }
     for key in ("language", "date_posted"):
         value = _text(config.get(key))

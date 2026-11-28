@@ -87,6 +87,7 @@ def client_replying(handler) -> httpx.AsyncClient:
 @pytest.fixture(autouse=True)
 def api_key(monkeypatch):
     monkeypatch.setenv("JSEARCH_API_KEY", "test-key")
+    jsearch.reset_country_pool()
 
 
 # ---- the adapter ----------------------------------------------------------
@@ -199,6 +200,44 @@ async def test_jsearch_needs_an_api_key(monkeypatch):
     async with client_replying(lambda r: httpx.Response(200, json=payload())) as client:
         with pytest.raises(RuntimeError, match="JSEARCH_API_KEY"):
             await jsearch.discover(board, client)
+
+
+# ---- picking a country per request ---------------------------------------
+
+
+def test_jsearch_cycles_countries_without_repeating(monkeypatch):
+    monkeypatch.setattr(jsearch.random, "sample", lambda codes, k: list(reversed(codes)))
+
+    picks = [jsearch._country({"countries": ["ca", "ng", "de"]}) for _ in range(4)]
+
+    # The whole list is covered before it reshuffles and starts again.
+    assert picks == ["de", "ng", "ca", "de"]
+
+
+def test_jsearch_country_list_wins_over_a_pinned_country(monkeypatch):
+    monkeypatch.setattr(jsearch.random, "sample", lambda codes, k: list(codes))
+
+    assert jsearch._country({"countries": ["ca"], "country": "us"}) == "ca"
+
+
+def test_jsearch_defaults_to_us_without_a_country(monkeypatch):
+    assert jsearch._country({}) == "us"
+    assert jsearch._country({"countries": []}) == "us"
+
+
+async def test_jsearch_request_carries_the_sampled_country(monkeypatch):
+    board = jsearch_board(countries=["ca", "ng"])
+    monkeypatch.setattr(jsearch.random, "sample", lambda codes, k: list(codes))
+    seen: list[str] = []
+
+    def reply(request):
+        seen.append(request.url.params["country"])
+        return httpx.Response(200, json=payload(raw_job()))
+
+    async with client_replying(reply) as client:
+        await jsearch.discover(board, client)
+
+    assert seen == ["ca"]
 
 
 # ---- storage + pipeline ---------------------------------------------------
