@@ -6,15 +6,18 @@
  * service. Keeping one file means "Europe" can never mean one thing on the jobs
  * page and something else in recommendations.
  *
- * A job matches a region when any of its location strings matches any of that
- * region's patterns. Patterns are PostgreSQL regular expressions evaluated with
- * `~*` (case-insensitive). `\m` and `\M` are Postgres word boundaries, which is
- * what keeps `\mus\M` from matching "USA" or "Austin", and `ca\M` from matching
+ * Patterns are PostgreSQL regular expressions evaluated with `~*`
+ * (case-insensitive). `\m` and `\M` are Postgres word boundaries, which is what
+ * keeps `\mus\M` from matching "USA" or "Austin", and `ca\M` from matching
  * "Canada".
  *
- * Regions deliberately overlap: "Remote - USA" is both United States and
- * remote, and a job listing several cities belongs to several regions. Counts
- * are therefore per region, not a partition of all jobs.
+ * A location string is split on separators, and each segment is assigned to the
+ * region with the longest matching pattern. That resolves accidental overlaps:
+ * "Vienna, Virginia, United States" is the US, not Europe, because "Virginia"
+ * and "United States" are longer matches than "Vienna"; "Berlin, DE" is Europe,
+ * not Delaware. A job listing several cities still belongs to several regions,
+ * because each segment is classified independently. Counts are therefore per
+ * region, not a partition of all jobs.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

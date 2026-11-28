@@ -69,17 +69,47 @@ def _normalize_workplace(value: str) -> str:
 _LOCATION_TTL_SECONDS = 600
 _location_cache: tuple[float, dict[str, list[str]], list[str]] | None = None
 
-_LOCATION_INDEX_SQL = """
+# A location string can mention several places ("Austin, TX; Toronto, Canada")
+# and a single place can match several regions by accident: "Vienna, Virginia,
+# United States" matches Europe's "Vienna" and the US's "Virginia", and
+# "Berlin, DE" matches Europe's "Berlin" but also Delaware's "DE". Splitting on
+# separators and keeping only each segment's longest match resolves those
+# collisions: "United States" beats "Vienna", and "Berlin" beats "DE". A bare
+# "US"/"USA"/"U.S." is treated as an explicit country signal so "Athens, GA, US"
+# stays American even though "Athens" is also a European city.
+_LOCATION_INDEX_SQL = r"""
 WITH open_locs AS MATERIALIZED (
   SELECT DISTINCT loc.loc
   FROM jobs
   CROSS JOIN LATERAL jsonb_array_elements_text((jobs.locations_json)::jsonb) AS loc(loc)
   WHERE jobs.status = 'open' AND jobs.locations_json IS NOT NULL
+),
+segments AS MATERIALIZED (
+  SELECT l.loc, btrim(seg) AS seg
+  FROM open_locs l
+  CROSS JOIN LATERAL regexp_split_to_table(
+    l.loc, '(?i)\s*[;|•/]\s*|\s+or\s+|\n'
+  ) AS seg
+  WHERE btrim(seg) <> ''
+),
+matches AS MATERIALIZED (
+  SELECT s.loc, s.seg, p.slug,
+         length(substring(s.seg from '(?i)' || p.pattern)) AS match_len
+  FROM segments s
+  JOIN unnest(%s::text[], %s::text[]) AS p(slug, pattern)
+    ON s.seg ~* p.pattern
+),
+ranked AS (
+  SELECT loc, seg, slug, match_len,
+         max(match_len) OVER (PARTITION BY loc, seg) AS best_len,
+         bool_or(slug = 'us' AND seg ~* '(\mus\M|\musa\M|u\.s\.)')
+           OVER (PARTITION BY loc, seg) AS us_context
+  FROM matches
 )
-SELECT DISTINCT l.loc, p.slug
-FROM open_locs l
-JOIN unnest(%s::text[], %s::text[]) AS p(slug, pattern)
-  ON l.loc ~* p.pattern
+SELECT DISTINCT loc, slug
+FROM ranked
+WHERE (us_context AND slug = 'us')
+   OR (NOT us_context AND match_len = best_len)
 """
 
 
