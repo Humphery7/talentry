@@ -18,7 +18,8 @@ CV_SYSTEM = """You tailor a candidate's existing CV to one job. You are EDITING 
 Rules you must follow:
 - Return the candidate's COMPLETE CV as Markdown. Keep every section that exists in the original (summary, skills, experience, projects, education, certifications, languages, awards, volunteer work, etc.) and keep every employer, role, project, school, certification and date.
 - Preserve the original wording and level of detail. You may reorder sections and bullets, move the most relevant experience first, reword bullets to use the job's terminology, and trim only clearly irrelevant detail.
-- You may add a SMALL number (at most 8) of closely adjacent skills, frameworks or libraries that the job asks for and that belong to the same language or ecosystem already demonstrated in the CV. Example: adding NestJS to a strong Node/TypeScript CV, or Django to a strong Python CV. List each one in `additions` with a short `basis` naming the existing skill that makes it defensible.
+- You may add a SMALL number (at most 8) of closely adjacent, NAMED technologies that the job asks for and that belong to the same language or ecosystem already demonstrated in the CV. Example: adding NestJS to a strong Node/TypeScript CV, or Django to a strong Python CV. Every addition must be a concrete product, framework, library or language with a name (something a job posting would capitalise), and its `basis` must name the specific existing skill that makes it defensible. List each one in `additions`.
+- NEVER add soft skills, methodologies, umbrella terms or abbreviations. Examples of what is forbidden: Agile, Scrum, Kanban, SDK, API, REST, CI/CD, DevOps, microservices, serverless, cloud, OOP, testing, communication, teamwork, leadership, problem solving. If the job asks for one of those, leave it out: it is not a skill you can add on the candidate's behalf.
 - NEVER add a new programming language or platform (for example Java, C#, .NET, Go, Rust, Ruby, PHP, Swift, Kotlin, C or C++) unless it already appears in the CV. Never add employers, job titles, schools, degrees, dates, certifications or numeric achievements.
 - Put the reasons for any larger changes in `notes`.
 - Start directly with the CV body. Do not repeat the candidate's name, headline, email, phone or links; those are added separately.
@@ -34,8 +35,20 @@ CV_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "skill": {"type": "string"},
-                    "basis": {"type": "string"},
+                    "skill": {
+                        "type": "string",
+                        "description": (
+                            "A concrete, named technology such as Next.js. "
+                            "Never a generic term like SDK or Agile."
+                        ),
+                    },
+                    "basis": {
+                        "type": "string",
+                        "description": (
+                            "The specific existing skill in the CV that makes "
+                            "the addition defensible."
+                        ),
+                    },
                 },
                 "required": ["skill", "basis"],
             },
@@ -80,6 +93,101 @@ def far_languages(text: str, source: str) -> list[str]:
         for name, pattern in _FAR_LANGUAGES
         if pattern.search(text) and not pattern.search(source)
     ]
+
+
+# Additions must be named technologies. These are the generic words a model
+# reaches for when it wants to "add a skill" without naming one: soft skills,
+# methodologies, umbrella terms and abbreviations. None of them is something a
+# candidate can be said to know or not know, so none may be added on their
+# behalf. Matched against `normalize`, so "CI/CD" is stored as "ci cd".
+_GENERIC_SKILLS: frozenset[str] = frozenset(
+    {
+        # Methodologies and process.
+        "agile",
+        "scrum",
+        "kanban",
+        "waterfall",
+        "safe",
+        "lean",
+        "devops",
+        "devsecops",
+        "ci cd",
+        "cicd",
+        "continuous integration",
+        "continuous delivery",
+        "tdd",
+        "bdd",
+        "pair programming",
+        "code review",
+        "unit testing",
+        "testing",
+        "qa",
+        "quality assurance",
+        # Soft skills.
+        "communication",
+        "teamwork",
+        "team work",
+        "collaboration",
+        "leadership",
+        "problem solving",
+        "time management",
+        "mentoring",
+        "presentation",
+        "stakeholder management",
+        "analytical skills",
+        "critical thinking",
+        "attention to detail",
+        "adaptability",
+        "ownership",
+        "interpersonal skills",
+        # Umbrella terms, architecture words and abbreviations.
+        "sdk",
+        "api",
+        "apis",
+        "rest",
+        "restful",
+        "microservices",
+        "monolith",
+        "serverless",
+        "cloud",
+        "cloud computing",
+        "web",
+        "web development",
+        "frontend",
+        "front end",
+        "backend",
+        "back end",
+        "full stack",
+        "fullstack",
+        "mobile development",
+        "software development",
+        "software engineering",
+        "programming",
+        "coding",
+        "algorithms",
+        "data structures",
+        "oop",
+        "object oriented programming",
+        "mvc",
+        "design patterns",
+        "system design",
+        "distributed systems",
+        "scalability",
+        "performance",
+        "security",
+        "networking",
+        "databases",
+        "database",
+        "ai",
+        "artificial intelligence",
+        "machine learning",
+    }
+)
+
+
+def is_generic_skill(skill: str) -> bool:
+    """True when `skill` is too vague to count as an added technology."""
+    return normalize(skill) in _GENERIC_SKILLS
 
 
 LETTER_SYSTEM = """You write a concise, honest cover letter (250-350 words) for one candidate and one job.
@@ -187,6 +295,11 @@ def validate_cv(
         basis = raw_basis.strip() if isinstance(raw_basis, str) else ""
         if not skill or present(skill):
             continue  # already in the CV, so nothing was added
+        if is_generic_skill(skill):
+            problems.append(
+                f"added skill is a generic term, not a named technology: {skill}"
+            )
+            continue
         if not basis:
             problems.append(f"added skill has no basis in the CV: {skill}")
         if not present(skill, norm_cv):

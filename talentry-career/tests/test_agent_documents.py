@@ -59,6 +59,33 @@ def test_rejects_an_addition_that_is_not_in_the_cv_body() -> None:
     assert any("missing from the CV body" in problem for problem in problems)
 
 
+def test_rejects_generic_skills_masquerading_as_additions() -> None:
+    tailored = CV.replace(
+        "React and TypeScript applications.",
+        "React, TypeScript, SDK and Agile applications.",
+    )
+    data = {
+        "cv": tailored,
+        "additions": [
+            {"skill": "SDK", "basis": "React"},
+            {"skill": "Agile", "basis": "Led a team"},
+        ],
+    }
+    problems = documents.validate_cv(data, source(), CV)
+    assert any("generic term" in problem and "SDK" in problem for problem in problems)
+    assert any(
+        "generic term" in problem and "Agile" in problem for problem in problems
+    )
+
+
+def test_generic_skill_check_ignores_punctuation_and_case() -> None:
+    assert documents.is_generic_skill("CI/CD")
+    assert documents.is_generic_skill("problem-solving")
+    assert documents.is_generic_skill("RESTful")
+    assert not documents.is_generic_skill("Next.js")
+    assert not documents.is_generic_skill("PostgreSQL")
+
+
 def test_markdown_has_one_header_with_contact_details() -> None:
     body = "# Ada Example\n\n## Summary\nFrontend engineer."
     markdown = documents.cv_to_markdown(body, FACTS)

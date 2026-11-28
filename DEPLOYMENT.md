@@ -321,7 +321,8 @@ chmod 600 ~/talentry/talentry-career/.env
 ```
 
 It holds `DATABASE_URL`, `GEMINI_API_KEY`, `PLAYWRIGHT_CHANNEL`, and
-`AI_KEY_SECRET` (must equal the backend's value).
+`AI_KEY_SECRET` (must equal the backend's value). Keep `PLAYWRIGHT_CHANNEL`
+empty on the server — see the browser section below.
 
 Test by hand:
 
@@ -445,6 +446,29 @@ PLAYWRIGHT_BROWSERS_PATH=/opt/talentry-browsers .venv/bin/playwright install chr
 `PLAYWRIGHT_BROWSERS_PATH` is the environment variable that tells Playwright
 where to keep browsers. It must be set **both** when installing and when
 running.
+
+Chromium also needs a few system libraries on a minimal Oracle Linux image:
+
+```bash
+sudo dnf install -y alsa-lib atk at-spi2-core mesa-libgbm \
+  libXcomposite libXdamage libXfixes libxkbcommon libXrandr
+```
+
+Leave `PLAYWRIGHT_CHANNEL` empty in `talentry-career/.env`. Setting it to
+`chrome` makes Playwright look for Google Chrome, which has no Linux arm64
+build and is not installed on the server; every apply then fails with
+`Chromium distribution 'chrome' is not found`.
+
+### LibreOffice (reusing the candidate's own CV layout)
+
+When a candidate uploads a DOCX, the worker edits that file and converts it
+back to PDF with LibreOffice. Without it the application still runs, but the
+CV falls back to the standard layout:
+
+```bash
+sudo dnf install -y libreoffice-writer
+soffice --version
+```
 
 ```bash
 sudo tee /etc/systemd/system/talentry-worker.service > /dev/null <<'EOF'
